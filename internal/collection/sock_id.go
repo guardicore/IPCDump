@@ -54,11 +54,17 @@ static inline int get_pid_for_sock(u64 *pid, struct sock *sock) {
 }
 `
 
+type inodeProcessInfo struct {
+    Fd uint64
+    Pid uint64
+    ProcessStartTime uint64
+}
+
 type SocketIdentifier struct {
     inodeInfoMap map[uint64]inodeProcessInfo
 }
 
-func InitSocketIdCollection(bpfBuilder *bpf.BpfBuilder) error {
+func SetupSockIdCollectionBpf(bpfBuilder *bpf.BpfBuilder) error {
     if err := bpfBuilder.AddIncludes(sockIdIncludes); err != nil {
         return err
     }

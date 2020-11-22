@@ -3,9 +3,13 @@ package collection
 import (
     "fmt"
     "bytes"
+    "unsafe"
+    "strings"
+    "strconv"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
+    "github.com/guardicode/ipcdump/internal/events"
 )
 
 const unixIncludes = `
@@ -22,34 +26,50 @@ enum unix_ipc_type_t {
     UNIX_IPC_TYPE_DGRAM,
 };
 
-struct __attribute__((packed)) unix_sock_ipc_data_t {
-    u8 type;
+struct __attribute__((packed)) unix_sock_ipc_metadata_t {
     u64 src_pid;
+    char src_comm[16];
     u64 dst_pid;
+    char dst_comm[16];
     u64 count;
+    u64 src_inode;
+    u64 timestamp;
     char path[108];
+    u32 pad0;
+    u8 type;
+    u8 pad1;
+    u16 pad2;
+    u32 pad3;
+    u32 pad4;
+    u32 pad5;
+};
+
+struct __attribute__((packed)) unix_sock_ipc_data_t {
+    struct unix_sock_ipc_metadata_t d;
+    REMAINING_BYTES_BUFFER(struct unix_sock_ipc_metadata_t);
 };
 
 BPF_PERF_OUTPUT(unix_events);
 
-BPF_HASH(unix_event_arr, u64, struct unix_sock_ipc_data_t);
+BPF_HASH(unix_event_arr, u64, struct unix_sock_ipc_metadata_t);
+BPF_PERCPU_ARRAY(working_unix_event_arr, struct unix_sock_ipc_data_t, 1);
 
 
-static inline struct unix_sock_ipc_data_t *current_unix_event(void) __attribute__((always_inline));
-static inline struct unix_sock_ipc_data_t *current_unix_event(void) {
+static inline struct unix_sock_ipc_metadata_t *current_unix_event(void) __attribute__((always_inline));
+static inline struct unix_sock_ipc_metadata_t *current_unix_event(void) {
     u64 key = bpf_get_current_pid_tgid();
-    struct unix_sock_ipc_data_t *e = unix_event_arr.lookup(&key);
+    struct unix_sock_ipc_metadata_t *e = unix_event_arr.lookup(&key);
     if (!e) {
-        bpf_trace_printk("failed to get current unix event\n");
         return NULL;
     }
     return e;
 }
 
-static inline struct unix_sock_ipc_data_t *current_unix_event_type(u8 expected_type) __attribute__((always_inline));
-static inline struct unix_sock_ipc_data_t *current_unix_event_type(u8 expected_type) {
-    struct unix_sock_ipc_data_t *e = current_unix_event();
+static inline struct unix_sock_ipc_metadata_t *current_unix_event_type(u8 expected_type) __attribute__((always_inline));
+static inline struct unix_sock_ipc_metadata_t *current_unix_event_type(u8 expected_type) {
+    struct unix_sock_ipc_metadata_t *e = current_unix_event();
     if (!e) {
+        bpf_trace_printk("no current unix event was found (expected type %d)\n", expected_type);
         return NULL;
     }
 
@@ -61,10 +81,10 @@ static inline struct unix_sock_ipc_data_t *current_unix_event_type(u8 expected_t
     return e;
 }
 
-static inline struct unix_sock_ipc_data_t *new_unix_event(u8 new_type) __attribute__((always_inline));
-static inline struct unix_sock_ipc_data_t *new_unix_event(u8 new_type) {
+static inline struct unix_sock_ipc_metadata_t *new_unix_event(u8 new_type) __attribute__((always_inline));
+static inline struct unix_sock_ipc_metadata_t *new_unix_event(u8 new_type) {
     u64 key = bpf_get_current_pid_tgid();
-    struct unix_sock_ipc_data_t new = { .type = new_type };
+    struct unix_sock_ipc_metadata_t new = { .type = new_type, .pad0 = 1, .pad1 = 2, .pad2 = 3, .pad4 = 5, .pad5 = 6 };
 
     unix_event_arr.update(&key, &new);
     return current_unix_event_type(new_type);
@@ -108,6 +128,11 @@ static inline int try_get_unix_name_path(char *path, u32 path_len, const struct 
 
 static int try_get_unix_address_path(char *path, u32 path_len, const struct unix_address *addr) {
     struct sockaddr_un name_copy = {0};
+
+    if (!addr) {
+        return -1;
+    }
+
     u32 addr_len = (u32)addr->len;
 
     if (addr_len <= 2) {
@@ -157,41 +182,106 @@ static int try_get_unix_socket_path(char *path, int path_len, const struct socke
     return 0;
 }
 
-// TODO: probe only on sendmsg() success
 int probe_unix_stream_sendmsg(struct pt_regs *ctx,
                               struct socket *sock,
                               struct msghdr *msg,
                               size_t len) {
-    struct unix_sock_ipc_data_t *e = new_unix_event(UNIX_IPC_TYPE_STREAM);
-    if (e) {
-        e->src_pid = bpf_get_current_pid_tgid() >> 32;
-        e->dst_pid = sock->sk->sk_peer_pid->numbers[0].nr;
-        if (try_get_unix_socket_path(e->path, sizeof(e->path), sock)) {
-            char anonymous[] = "<anonymous>";
-            bpf_probe_read_str(e->path, sizeof(e->path), anonymous);
+    struct unix_sock_ipc_metadata_t *e = new_unix_event(UNIX_IPC_TYPE_STREAM);
+    if (!e) {
+        bpf_trace_printk("failed to get new unix ipc event for probe_unix_stream_sendmsg()\n");
+        return 0;
+    }
+
+    e->timestamp = bpf_ktime_get_ns();
+    e->src_pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(e->src_comm, sizeof(e->src_comm));
+    e->dst_pid = sock->sk->sk_peer_pid->numbers[0].nr;
+    get_comm_for_pid(e->dst_pid, e->dst_comm, sizeof(e->dst_comm));
+
+    if (try_get_unix_socket_path(e->path, sizeof(e->path), sock)) {
+        char anonymous[] = "<anonymous>";
+        if (bpf_probe_read_str(e->path, sizeof(e->path), anonymous) < 0) {
+            bpf_trace_printk("failed to copy <anonymous> string in probe_unix_stream_sendmsg()\n");
         }
     }
 
     return 0;
 }
 
-int retprobe_unix_stream_sendmsg(struct pt_regs *ctx) {
+BPF_HASH(copied_dgram_skb_arr, u64, struct sk_buff*);
 
-    int sent_count = PT_REGS_RC(ctx);
-    if (sent_count < 0) {
+int probe_skb_copy_datagram_from_iter(struct pt_regs *ctx,
+                                      struct sk_buff *skb,
+                                      int offset,
+                                      struct iov_iter *from,
+                                      int len) {
+    if (!skb) {
         return 0;
     }
 
-    struct unix_sock_ipc_data_t *e = current_unix_event_type(UNIX_IPC_TYPE_STREAM);
+    struct unix_sock_ipc_metadata_t *event_metadata = current_unix_event();
+    if (!event_metadata || event_metadata->type != UNIX_IPC_TYPE_STREAM) {
+        return 0;
+    }
+
+    u64 key = bpf_get_current_pid_tgid();
+    copied_dgram_skb_arr.update(&key, &skb);
+
+    return 0;
+}
+
+// this is called once per skb_copy_datagram_from_iter(), which *may be more* than once per sendmsg().
+int retprobe_skb_copy_datagram_from_iter(struct pt_regs *ctx) {
+
+    u64 pkey = bpf_get_current_pid_tgid();
+    struct sk_buff **skb_ptr = copied_dgram_skb_arr.lookup(&pkey);
+    if (!skb_ptr) {
+        bpf_trace_printk("failed to lookup saved argument skb in retprobe_skb_copy_datagram_from_iter()\n");
+        return 0;
+    }
+    struct sk_buff *skb = *skb_ptr;
+    copied_dgram_skb_arr.delete(&pkey);
+
+
+    struct unix_sock_ipc_metadata_t *event_metadata = current_unix_event();
+    if (!event_metadata || event_metadata->type != UNIX_IPC_TYPE_STREAM) {
+        return 0;
+    }
+
+    event_metadata->count = skb->len;
+
+    int ekey = 0;
+    struct unix_sock_ipc_data_t *e = working_unix_event_arr.lookup(&ekey);
     if (!e) {
-        bpf_trace_printk("failed to get current unix ipc event for retprobe_unix_stream_sendmsg()\n");
+        bpf_trace_printk("failed to get working unix ipc event in retprobe_skb_copy_datagram_from_iter()\n");
         return 0;
     }
 
-    e->count = sent_count;
-    unix_events.perf_submit(ctx, e, sizeof(*e));
-    delete_current_unix_event();
+    if (bpf_probe_read(&e->d, sizeof(e->d), event_metadata)) {
+        bpf_trace_printk("failed to copy unix ipc event metadata in retprobe_skb_copy_datagram_from_iter()\n");
+        return 0;
+    }
 
+    #ifdef COLLECT_IPC_BYTES
+    unsigned char *head_ptr = NULL;
+    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head)) {
+        bpf_trace_printk("failed to get unix socket head ptr in retprobe_skb_copy_datagram_from_iter()\n");
+        return 0;
+    }
+
+    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
+    if (bpf_probe_read(e->bytes, e->bytes_len, head_ptr)) {
+        bpf_trace_printk("failed to copy unix ipc event stream bytes in retprobe_skb_copy_datagram_from_iter()\n");
+    }
+    #endif
+
+    unix_events.perf_submit(ctx, e, EVENT_SIZE(e));
+
+    return 0;
+}
+
+int retprobe_unix_stream_sendmsg(struct pt_regs *ctx) {
+    delete_current_unix_event();
     return 0;
 }
 
@@ -199,20 +289,23 @@ int probe_unix_dgram_recvmsg(struct pt_regs *ctx,
                              struct socket *sock,
                              struct msghdr *msg,
                              size_t len) {
-    struct unix_sock_ipc_data_t *e = new_unix_event(UNIX_IPC_TYPE_DGRAM);
+    struct unix_sock_ipc_metadata_t *e = new_unix_event(UNIX_IPC_TYPE_DGRAM);
     if (!e) {
         bpf_trace_printk("failed to get new unix ipc event for probe_unix_dgram_recvmsg()\n");
         return 0;
     }
 
+    e->timestamp = bpf_ktime_get_ns();
     e->type = UNIX_IPC_TYPE_DGRAM;
     e->dst_pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(e->dst_comm, sizeof(e->dst_comm));
     struct msghdr msg_copy = {0};
     // TODO: check result
     bpf_probe_read(&msg_copy, sizeof(msg_copy), msg);
 
     if (!try_get_unix_msghdr_path(e->path, sizeof(e->path), &msg_copy)) {
     } else if (try_get_unix_socket_path(e->path, sizeof(e->path), sock)) {
+        // TODO: refactor
         char anonymous[] = "<anonymous>";
         bpf_probe_read_str(e->path, sizeof(e->path), anonymous);
     }
@@ -221,49 +314,65 @@ int probe_unix_dgram_recvmsg(struct pt_regs *ctx,
 
 }
 
+
 int retprobe_unix_dgram_recvmsg(struct pt_regs *ctx) {
-
-    int recv_count = PT_REGS_RC(ctx);
-    if (recv_count < 0) {
-        return 0;
-    }
-
-    struct unix_sock_ipc_data_t *e = current_unix_event_type(UNIX_IPC_TYPE_DGRAM);
-    if (!e) {
-        bpf_trace_printk("failed to get current unix ipc event for retprobe_unix_dgram_recvmsg()\n");
-        return 0;
-    }
-
-    e->count = recv_count;
-    unix_events.perf_submit(ctx, e, sizeof(*e));
     delete_current_unix_event();
-
     return 0;
 }
 
 int retprobe___skb_try_recv_datagram(struct pt_regs *ctx) {
 
-    if (!PT_REGS_RC(ctx)) {
-        return 0;
-    }
-
-    struct unix_sock_ipc_data_t *e = current_unix_event();
-    if (!e) {
-        bpf_trace_printk("failed to get current unix ipc event for retprobe___skb_try_recv_datagram\n");
-        return 0;
-    }
-
-    if (e->type != UNIX_IPC_TYPE_DGRAM) {
-        return 0;
-    }
-
     struct sk_buff *skb = (struct sk_buff*)PT_REGS_RC(ctx);
-    struct unix_skb_parms *cb = (struct unix_skb_parms*)(&(skb->cb));
-    e->src_pid = cb->pid->numbers[0].nr;
-
-    if (e->src_pid == 0) {
-        get_pid_for_sock(&e->src_pid, skb->sk);
+    if (!skb) {
+        return 0;
     }
+
+    struct unix_sock_ipc_metadata_t *event_metadata = current_unix_event();
+    if (!event_metadata || event_metadata->type != UNIX_IPC_TYPE_DGRAM) {
+        return 0;
+    }
+
+    struct unix_skb_parms *cb = (struct unix_skb_parms*)(&(skb->cb));
+    event_metadata->src_pid = cb->pid->numbers[0].nr;
+    event_metadata->src_inode = skb->sk->sk_socket->file->f_inode->i_ino;
+
+    if (event_metadata->src_pid == 0) {
+        get_pid_for_sock(&event_metadata->src_pid, skb->sk);
+    }
+    if (event_metadata->src_pid != 0) {
+        get_comm_for_pid(event_metadata->src_pid, event_metadata->src_comm, sizeof(event_metadata->src_comm));
+    }
+
+    event_metadata->count = skb->len;
+
+    // TODO: refactor all of this common logic
+
+    int ekey = 0;
+    struct unix_sock_ipc_data_t *e = working_unix_event_arr.lookup(&ekey);
+    if (!e) {
+        bpf_trace_printk("failed to get working unix ipc event in retprobe___skb_try_recv_datagram()\n");
+        return 0;
+    }
+
+    if (bpf_probe_read(&e->d, sizeof(e->d), event_metadata)) {
+        bpf_trace_printk("failed to copy unix ipc event metadata in retprobe___skb_try_recv_datagram()\n");
+        return 0;
+    }
+
+    #ifdef COLLECT_IPC_BYTES
+    unsigned char *head_ptr = NULL;
+    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head)) {
+        bpf_trace_printk("failed to get unix socket head ptr in retprobe___skb_try_recv_datagram()\n");
+        return 0;
+    }
+
+    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
+    if (bpf_probe_read(e->bytes, e->bytes_len, head_ptr)) {
+        bpf_trace_printk("failed to copy unix ipc event dgram bytes in retprobe___skb_try_recv_datagram()\n");
+    }
+    #endif
+
+    unix_events.perf_submit(ctx, e, EVENT_SIZE(e));
 
     return 0;
 }
@@ -281,33 +390,68 @@ const (
 )
 
 type unixSockIpcEvent struct {
-    Type uint8
 	SrcPid uint64
+	SrcComm [16]byte
     DstPid uint64
+	DstComm [16]byte
     Count uint64
+    SrcInode uint64
+    Timestamp uint64
     Path [108]byte
+    _ uint32
+    Type uint8
+    _ uint8
+    _ uint16
+    _ uint32
+    _ uint32
+    _ uint32
+    BytesLen uint16
 }
 
-func handleUnixSockIpcEvent(event *unixSockIpcEvent, sockId *SocketIdentifier) error {
-    var typeStr string
+func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
+
+    var eventType events.EmittedEventType
     switch event.Type {
     case UNIX_IPC_TYPE_STREAM:
-        typeStr = "STREAM"
+        eventType = events.IPC_EVENT_UNIX_SOCK_STREAM
     case UNIX_IPC_TYPE_DGRAM:
-        typeStr = "DGRAM"
+        eventType = events.IPC_EVENT_UNIX_SOCK_DGRAM
     default:
-        // TODO: handle error
         return fmt.Errorf("unix ipc event had unexpected type %d", event.Type)
     }
 
-    fmt.Printf("UNIX SOCK %v: %v --> %v over %s (%v bytes)\n",
-        typeStr,
-        event.SrcPid,
-        event.DstPid,
-        event.Path,
-        event.Count)
+    path := strings.TrimRight(string(event.Path[:]), "\x00")
 
-    return nil
+    metadata := events.IpcMetadata{
+        events.IpcMetadataPair{Name: "path", Value: path},
+        events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint(event.Count, 10)},
+    }
+
+
+    srcPid := (int64)(event.SrcPid)
+    if eventType == events.IPC_EVENT_UNIX_SOCK_DGRAM {
+        metadata = append(metadata,
+            events.IpcMetadataPair{Name: "src_inode", Value: strconv.FormatUint(event.SrcInode, 10)})
+        if srcPid <= 0 {
+            srcPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.SrcInode)
+            if !ok {
+                srcPid = -1
+            } else {
+                srcPid = (int64)(srcPidU)
+            }
+        }
+    }
+
+    e := events.IpcEvent{
+        Src: makeIpcEndpointI(commId, srcPid, event.SrcComm),
+        Dst: makeIpcEndpoint(commId, event.DstPid, event.DstComm),
+        Type: eventType,
+        Timestamp: TsFromKtime(event.Timestamp),
+        Metadata: metadata,
+        Bytes: eventBytes,
+    }
+    return events.EmitIpcEvent(e)
 }
 
 func InitUnixSocketIpcCollection(bpfBuilder *bpf.BpfBuilder, streams bool, dgrams bool) error {
@@ -325,7 +469,9 @@ func InitUnixSocketIpcCollection(bpfBuilder *bpf.BpfBuilder, streams bool, dgram
 }
 
 // in theory we could pass sockId for just the datagram case
-func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, sockId *SocketIdentifier) error {
+func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
+
     if (collectUnixStreams || collectUnixDgrams) == false {
         return nil
     }
@@ -341,18 +487,34 @@ func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, sockId *Sock
     defer perfMap.Stop()
 
     if collectUnixStreams {
-        kprobe, err := module.LoadKprobe("probe_unix_stream_sendmsg")
+        kprobe, err := module.LoadKprobe("retprobe_unix_stream_sendmsg");
         if err != nil {
             return err
         }
-        if err := module.AttachKprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
+        if err = module.AttachKretprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
             return err
         }
 
-        if kprobe, err = module.LoadKprobe("retprobe_unix_stream_sendmsg"); err != nil {
+        kprobe, err = module.LoadKprobe("probe_unix_stream_sendmsg")
+        if err != nil {
             return err
         }
-        if err = module.AttachKretprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
+        if err = module.AttachKprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
+            return err
+        }
+
+        kprobe, err = module.LoadKprobe("retprobe_skb_copy_datagram_from_iter")
+        if err != nil {
+            return err
+        }
+        if err = module.AttachKretprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
+            return err
+        }
+        kprobe, err = module.LoadKprobe("probe_skb_copy_datagram_from_iter")
+        if err != nil {
+            return err
+        }
+        if err = module.AttachKprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
             return err
         }
     }
@@ -386,10 +548,12 @@ func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, sockId *Sock
         select {
         case perfData := <-perfChannel:
             var event unixSockIpcEvent
-            if err := binary.Read(bytes.NewBuffer(perfData), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse unix socket ipc event: %w", err)
+            eventMetadata := perfData[:unsafe.Sizeof(event)]
+            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
+                return fmt.Errorf("failed to parse unix sock ipc event: %w", err)
             }
-            if err := handleUnixSockIpcEvent(&event, sockId); err != nil {
+            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+            if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
                 return fmt.Errorf("failed to handle unix socket ipc event: %w", err)
             }
 

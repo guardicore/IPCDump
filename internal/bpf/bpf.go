@@ -61,7 +61,8 @@ func (b *BpfBuilder) LoadModule() (*bcc.Module, error) {
     m := bcc.NewModule(finalBpfProgram, []string{})
 
     if m == nil {
-        return nil, errors.New("failed to compile bpf module.\n\nsource dump:\n\n" + finalBpfProgram)
+        //return nil, errors.New("failed to compile bpf module.\n\nsource dump:\n\n" + finalBpfProgram)
+        return nil, errors.New("failed to compile bpf module.\n\nsource dump:\n\n")
     }
 
     b.loaded = true

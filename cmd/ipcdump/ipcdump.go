@@ -3,113 +3,63 @@ package main
 import (
     "github.com/guardicode/ipcdump/internal/collection"
     "github.com/guardicode/ipcdump/internal/bpf"
+    "github.com/guardicode/ipcdump/internal/events"
     "fmt"
     "os"
     "os/signal"
     "flag"
     "sync"
-    "strings"
-    "strconv"
-
-    "github.com/iovisor/gobpf/bcc"
 )
 
-// TODO: refactor out
-type uintArrayFlags []uint64
+// TODO: refactor out MAX_EVENT_SIZE
+var bpfUtilSource = `
+#ifdef COLLECT_IPC_BYTES
 
-func (i *uintArrayFlags) String() string {
-	return ""
-}
-
-func (i *uintArrayFlags) Set(value string) error {
-    u, err := strconv.ParseUint(value, 0, 32)
-    if err != nil {
-        return err
-    }
-	*i = append(*i, u)
-	return nil
-}
-
-type stringArrayFlags []string
-
-func (i *stringArrayFlags) String() string {
-	return ""
-}
-
-func (i *stringArrayFlags) Set(value string) error {
-	*i = append(*i, value)
-	return nil
-}
-// till here
+#define MAX_EVENT_SIZE 0x8000
+#define REMAINING_BYTES_BUFFER(t) \
+    u16 bytes_len; \
+    u16 pad0;  \
+    u16 pad1;  \
+    u16 pad2;  \
+    unsigned char bytes[MAX_EVENT_SIZE-sizeof(u64)-sizeof(t)]
 
 
-
-const ipcSource = `
-#define KBUILD_MODNAME "IPCDUMP"
-
-__DEFINES__
-
-// TODO: this from outside!
-#ifdef BPF_DEBUG
-#define TRACE(fmt, ...) do { bpf_trace_printk(fmt, __VA_ARGS__); } while (0)
-#else
-#define TRACE(fmt, ...)
+#ifndef COLLECT_IPC_BYTES_MAX
+#define COLLECT_IPC_BYTES_MAX (MAX_EVENT_SIZE)
 #endif
 
+#define BYTES_BUF_LEN(e, count) ((u16)(min(min((u64)sizeof((e)->bytes), (u64)(count)), (u64)(COLLECT_IPC_BYTES_MAX))))
+#define EVENT_SIZE(e) ((u32)(min(offsetof(typeof(*e), bytes) + (e)->bytes_len, (unsigned long)MAX_EVENT_SIZE)))
+
+
+#else  // !COLLECT_IPC_BYTES
+
+
+#define REMAINING_BYTES_BUFFER(t) \
+    u16 bytes_len_always_zero; \
+    u16 pad0; \
+    u16 pad1; \
+    u16 pad2
+#define EVENT_SIZE(e) (sizeof(*(e)))
+
+#endif
 `
 
-
-const (
-    IPC_EVENT_NONE = iota
-    IPC_EVENT_SIGNAL = iota
-    IPC_EVENT_UNIX_SOCK_STREAM = iota
-    IPC_EVENT_UNIX_SOCK_DGRAM = iota
-    IPC_EVENT_PTY_WRITE = iota
-    IPC_EVENT_LOOPBACK_SOCK_TCP = iota
-    IPC_EVENT_LOOPBACK_SOCK_UDP = iota
-)
-
-/*func IsFilteringBySrcPid() bool {
-    return len(filterBySrcPids) > 0
-}
-func IsFilteringByDstPid() bool {
-    return len(filterByDstPids) > 0
-}
-func IsSrcPidAllowed(pid uint64) bool {
-    if IsFilteringBySrcPid() {
-        return true
-    }
-    _, ok = filterBySrcPids[pid]
-    return ok
-}
-func IsDstPidAllowed(pid uint64) bool {
-    if IsFilteringByDstPid() {
-        return true
-    }
-    _, ok = filterByDstPids[pid]
-    return ok
-}
-
-func EmitIpcEvent(type uint16, srcPid uint64, dstPid uint64, metadata map[string]string, contents []byte) bool {
-    if !IsSrcPidAllowed(srcPid) || !IsDstPidAllowed(dstPid) {
-        return false
-    }
-    // we rely on the type filtering to hold true at the event-generation level, so we don't check it here
-}*/
-
 func main() {
-    var dumpBytes int
+    var dumpBytes bool
+    var dumpBytesMax uint
     var filterBySrcPids uintArrayFlags
     var filterByDstPids uintArrayFlags
     var filterByPids uintArrayFlags
     var filterByTypes stringArrayFlags
     var outputFormat string
 
-    flag.IntVar(&dumpBytes, "X", 0, "dump IPC bytes where relevant (rather than just event details)")
+    flag.BoolVar(&dumpBytes, "x", false, "dump IPC bytes where relevant (rather than just event details).")
+    flag.UintVar(&dumpBytesMax, "B", 0, "max number of bytes to dump per event, or 0 for complete event (may be large). meaningful only if -x is specified.")
     flag.Var(&filterBySrcPids, "s", "filter by source pid (can be specified more than once)")
     flag.Var(&filterByDstPids, "d", "filter by dest pid (can be specified more than once)")
     flag.Var(&filterByPids, "p", "filter by pid (either source or dest, can be specified more than once)")
-    flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: k|signal  u|unix  ud|unix-dgram  us|unix-stream  p|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp")
+    flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  p|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp")
     flag.StringVar(&outputFormat, "f", "text", "<text|json> output format (default is text)")
 
     flag.Parse()
@@ -121,24 +71,46 @@ func main() {
     var collectLoopbackTcp = false
     var collectLoopbackUdp = false
 
-    var filteredSrcPids = make(map[uint64]struct{})
-    var filteredDstPids = make(map[uint64]struct{})
-    for _, pid := range filterByPids {
-        filteredSrcPids[pid] = struct{}{}
-        filteredDstPids[pid] = struct{}{}
-    }
-    for _, pid := range filterBySrcPids {
-        filteredSrcPids[pid] = struct{}{}
-    }
-    for _, pid := range filterBySrcPids {
-        filteredDstPids[pid] = struct{}{}
-    }
-
     var collectAllTypes = len(filterByTypes) == 0
     if !collectAllTypes {
         if len(filterByTypes) == 1 && (filterByTypes[0] == "a" || filterByTypes[0] == "all") {
             collectAllTypes = true
         }
+    }
+
+    if dumpBytes {
+        bytesLimit := -1
+        if dumpBytesMax != 0 {
+            bytesLimit = (int)(dumpBytesMax)
+        }
+        // TODO: check limit against 32k
+        if err := events.SetEmitOutputBytesLimit(bytesLimit); err != nil {
+            fmt.Fprintf(os.Stderr, "failed to set output bytes limit: %s\n", err)
+            os.Exit(1)
+        }
+    } else if dumpBytesMax != 0 {
+        fmt.Fprintf(os.Stderr, "cannot set output bytes limit if -x is not specified\n")
+        os.Exit(1)
+    }
+    // not dumping bytes is default behavior
+
+    events.FilterBySrcPids(filterBySrcPids)
+    events.FilterByDstPids(filterByDstPids)
+    events.FilterByAnyPids(filterByPids)
+
+    var outputFmt events.EventOutputFormat
+    switch outputFormat {
+    case "text":
+        outputFmt = events.EMIT_FMT_TEXT
+    case "json":
+        outputFmt = events.EMIT_FMT_JSON
+    default:
+        fmt.Fprintf(os.Stderr, "unrecognized output format \"%s\"\n", outputFormat)
+        os.Exit(1)
+    }
+    if err := events.SetEmitOutputFormat(outputFmt); err != nil {
+        fmt.Fprintf(os.Stderr, "failed to set output format: %s\n", err)
+        os.Exit(1)
     }
 
     if collectAllTypes {
@@ -148,64 +120,71 @@ func main() {
         collectPtys = true
         collectLoopbackTcp = true
         collectLoopbackUdp = true
-    }
-    for _, filterType := range filterByTypes {
-        switch filterType {
-        case "k":
-            fallthrough
-        case "signal":
-            collectSignals = true
+    } else {
+        for _, filterType := range filterByTypes {
+            switch filterType {
+            case "k":
+                fallthrough
+            case "signal":
+                collectSignals = true
 
-        case "us":
-            fallthrough
-        case "unix-stream":
-            collectUnixStreams = true
+            case "us":
+                fallthrough
+            case "unix-stream":
+                collectUnixStreams = true
 
-        case "ud":
-            fallthrough
-        case "unix-dgram":
-            collectUnixDgrams = true
+            case "ud":
+                fallthrough
+            case "unix-dgram":
+                collectUnixDgrams = true
 
-        case "u":
-            fallthrough
-        case "unix":
-            collectUnixStreams = true
-            collectUnixDgrams = true
+            case "u":
+                fallthrough
+            case "unix":
+                collectUnixStreams = true
+                collectUnixDgrams = true
 
-        case "p":
-            fallthrough
-        case "pty":
-            collectPtys = true
+            case "p":
+                fallthrough
+            case "pty":
+                collectPtys = true
 
-        case "lt":
-            fallthrough
-        case "loopback-tcp":
-            collectLoopbackTcp = true
+            case "lt":
+                fallthrough
+            case "loopback-tcp":
+                collectLoopbackTcp = true
 
-        case "lu":
-            fallthrough
-        case "loopback-udp":
-            collectLoopbackUdp = true
+            case "lu":
+                fallthrough
+            case "loopback-udp":
+                collectLoopbackUdp = true
 
-        case "lo":
-            fallthrough
-        case "loopback":
-            collectLoopbackTcp = true
-            collectLoopbackUdp = true
+            case "lo":
+                fallthrough
+            case "loopback":
+                collectLoopbackTcp = true
+                collectLoopbackUdp = true
 
-        default:
-            fmt.Fprintf(os.Stderr, "unrecognized filter type \"%s\"\n", filterType)
-            os.Exit(1)
+            default:
+                fmt.Fprintf(os.Stderr, "unrecognized filter type \"%s\"\n", filterType)
+                os.Exit(1)
+            }
         }
     }
 
 
-    finalBpfProgram := strings.ReplaceAll(ipcSource, "__DEFINES__", "#define BPF_DEBUG")
-    m := bcc.NewModule(finalBpfProgram, []string{})
-    defer m.Close()
-
-
     bpfBuilder := bpf.NewBpfBuilder()
+
+    // TODO: refactor out
+    if dumpBytes {
+        bpfBuilder.AddSources("#define COLLECT_IPC_BYTES")
+        if dumpBytesMax > 0 {
+            bpfBuilder.AddSources(fmt.Sprintf("#define COLLECT_IPC_BYTES_MAX (%v)", dumpBytesMax))
+        }
+    }
+    bpfBuilder.AddSources(bpfUtilSource)
+
+    collection.SetupCommCollectionBpf(bpfBuilder)
 
     if collectSignals {
         if err := collection.InitSignalCollection(bpfBuilder); err != nil {
@@ -219,7 +198,7 @@ func main() {
 
     needSocketId := collectUnixIpc || collectLoopbackIpc
     if needSocketId {
-        if err := collection.InitSocketIdCollection(bpfBuilder); err != nil {
+        if err := collection.SetupSockIdCollectionBpf(bpfBuilder); err != nil {
             fmt.Fprintf(os.Stderr, "failed to initialize socket identification: %v\n", err);
             os.Exit(1)
         }
@@ -252,6 +231,12 @@ func main() {
         os.Exit(1)
     }
 
+    commId, err := collection.NewCommIdentifier(bpfModule)
+    if err != nil {
+        fmt.Fprintf(os.Stderr, "failed to create a process comm identifier: %v\n", err)
+        os.Exit(1)
+    }
+
     var wg sync.WaitGroup
     exitChannel := make(chan struct{})
 
@@ -259,7 +244,10 @@ func main() {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            collection.CollectSignals(bpfModule, exitChannel)
+            if err := collection.CollectSignals(bpfModule, exitChannel, commId); err != nil {
+                fmt.Fprintf(os.Stderr, "signal collection failed: %v\n", err)
+                os.Exit(1)
+            }
         }()
     }
 
@@ -268,7 +256,7 @@ func main() {
         sockId, err = collection.NewSocketIdentifier(bpfModule)
         if err != nil {
             fmt.Fprintf(os.Stderr, "failed to create a socket identifier: %v\n", err)
-            os.Exit(1)
+                os.Exit(1)
         }
     }
 
@@ -276,7 +264,10 @@ func main() {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            collection.CollectUnixSocketIpc(bpfModule, exitChannel, sockId)
+            if err := collection.CollectUnixSocketIpc(bpfModule, exitChannel, commId, sockId); err != nil {
+                fmt.Fprintf(os.Stderr, "unix socket ipc collection failed: %v\n", err)
+                os.Exit(1)
+            }
         }()
     }
 
@@ -284,7 +275,10 @@ func main() {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            collection.CollectLoopbackIpc(bpfModule, exitChannel, sockId)
+            if err := collection.CollectLoopbackIpc(bpfModule, exitChannel, commId, sockId); err != nil {
+                fmt.Fprintf(os.Stderr, "loopback ipc collection failed: %v\n", err)
+                os.Exit(1)
+            }
         }()
     }
 
@@ -292,7 +286,10 @@ func main() {
         wg.Add(1)
         go func() {
             defer wg.Done()
-            collection.CollectPtyWrites(bpfModule, exitChannel)
+            if err := collection.CollectPtyWrites(bpfModule, exitChannel, commId); err != nil {
+                fmt.Fprintf(os.Stderr, "pty write collection failed: %v\n", err)
+                os.Exit(1)
+            }
         }()
     }
 

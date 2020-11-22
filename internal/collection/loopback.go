@@ -2,12 +2,14 @@ package collection
 
 import (
     "fmt"
+    "unsafe"
     "bytes"
     "syscall"
     "encoding/binary"
     "strconv"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
+    "github.com/guardicode/ipcdump/internal/events"
 )
 
 const loopbackIncludes = `
@@ -22,18 +24,32 @@ const loopbackIncludes = `
 `
 
 const loopbackSource = `
-struct __attribute__((packed)) loopback_sock_ipc_t {
-    u8 proto;
+struct loopback_sock_ipc_metadata_t {
     u64 src_pid;  // PID as in the userspace term (i.e. task->tgid in kernel)
+    char src_comm[16];
     u64 dst_pid;
+    char dst_comm[16];
     u64 count;
+    u64 dst_inode;
+    u64 timestamp;
     u16 src_port;
     u16 dst_port;
-    u64 dst_inode;
+    u8 proto;
+    u8 pad0;
+    u16 pad1;
+    // this is offset 80
+};
+
+struct loopback_sock_ipc_t {
+    struct loopback_sock_ipc_metadata_t d;
+    REMAINING_BYTES_BUFFER(struct loopback_sock_ipc_metadata_t);
 };
 
 BPF_PERF_OUTPUT(loopback_events);
 
+BPF_PERCPU_ARRAY(working_loopback_event_arr, struct loopback_sock_ipc_t, 1);
+
+// TODO: refactor tcp+udp
 int probe_tcp_rcv_established(struct pt_regs *ctx,
                               struct sock *sk,
                               struct sk_buff *skb) {
@@ -65,23 +81,34 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
         return 0;
     }
 
-    struct loopback_sock_ipc_t e = {
-        // TODO: tcp6
-        .proto = IPPROTO_TCP,
-        .src_port = src_port,
-        .dst_port = dst_port,
-        .src_pid = src_pid,
-        .count = count,
-    };
+    int ekey = 0;
+    struct loopback_sock_ipc_t *e = working_loopback_event_arr.lookup(&ekey);
+    if (!e) {
+        return 0;
+    }
+
+    // TODO: tcp6
+    e->d.proto = IPPROTO_TCP;
+    e->d.src_port = src_port;
+    e->d.dst_port = dst_port;
+    e->d.src_pid = src_pid;
+    e->d.count = count;
+    e->d.timestamp = bpf_ktime_get_ns();
+    bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
     // stack alignment :(
     u64 dst_pid = 0;
     get_pid_for_sock(&dst_pid, sk);
-    e.dst_pid = dst_pid;
+    e->d.dst_pid = dst_pid;
+    get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
+    e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
-    e.dst_inode = sk->sk_socket->file->f_inode->i_ino;
+    #ifdef COLLECT_IPC_BYTES
+    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
+    bpf_probe_read(e->bytes, e->bytes_len, head_ptr + transport_header + tcp_copy.doff * 4);
+    #endif
 
-    loopback_events.perf_submit(ctx, &e, sizeof(e));
+    loopback_events.perf_submit(ctx, e, EVENT_SIZE(e));
 
     return 0;
 }
@@ -118,22 +145,34 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
         return 0;
     }
 
-    struct loopback_sock_ipc_t e = {
-        // TODO: udp6
-        .proto = IPPROTO_UDP,
-        .src_port = src_port,
-        .dst_port = dst_port,
-        .src_pid = src_pid,
-        .count = count,
-    };
+    int ekey = 0;
+    struct loopback_sock_ipc_t *e = working_loopback_event_arr.lookup(&ekey);
+    if (!e) {
+        return 0;
+    }
+
+    // TODO: udp6
+    e->d.proto = IPPROTO_UDP;
+    e->d.src_port = src_port;
+    e->d.dst_port = dst_port;
+    e->d.src_pid = src_pid;
+    e->d.count = count;
+    e->d.timestamp = bpf_ktime_get_ns();
+    bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
     // stack alignment :(
     u64 dst_pid = 0;
     get_pid_for_sock(&dst_pid, sk);
-    e.dst_pid = dst_pid;
-    e.dst_inode = sk->sk_socket->file->f_inode->i_ino;
+    e->d.dst_pid = dst_pid;
+    get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
+    e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
-    loopback_events.perf_submit(ctx, &e, sizeof(e));
+    #ifdef COLLECT_IPC_BYTES
+    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
+    bpf_probe_read(e->bytes, e->bytes_len, head_ptr + transport_header + sizeof(udp_copy));
+    #endif
+
+    loopback_events.perf_submit(ctx, e, EVENT_SIZE(e));
 
     return 0;
 }
@@ -141,13 +180,19 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
 `
 
 type loopbackSockIpcEvent struct {
-    Proto uint8
 	SrcPid uint64
+    SrcComm [16]byte
 	DstPid uint64
+    DstComm [16]byte
     Count uint64
+    DstInode uint64
+    Timestamp uint64
     SrcPort uint16
     DstPort uint16
-    DstInode uint64
+    Proto uint8
+    _ uint8
+    _ uint16
+    BytesLen uint16
 }
 
 var (
@@ -155,7 +200,6 @@ var (
     collectLoopbackUdp = false
 )
 
-// TODO: tcp/udp!
 func InitLoopbackIpcCollection(bpfBuilder *bpf.BpfBuilder, tcp bool, udp bool) error {
     if (tcp || udp) == false {
         return nil
@@ -170,46 +214,47 @@ func InitLoopbackIpcCollection(bpfBuilder *bpf.BpfBuilder, tcp bool, udp bool) e
     return nil
 }
 
-type inodeProcessInfo struct {
-    Fd uint64
-    Pid uint64
-    ProcessStartTime uint64
-}
+func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
 
-func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, sockId *SocketIdentifier) error {
-    dstPidStr := "<unknown>"
-    if event.DstPid != 0 {
-        dstPidStr = strconv.FormatUint(event.DstPid, 10)
-    } else {
-        pid, ok := sockId.GuessMissingSockPidFromUsermode(event.DstInode)
-        if ok {
-            dstPidStr = strconv.FormatUint(pid, 10)
+    dstPid := (int64)(event.DstPid)
+    if dstPid <= 0 {
+        dstPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.DstInode)
+        if !ok {
+            dstPid = -1
+        } else {
+            dstPid = (int64)(dstPidU)
         }
     }
-    var typeStr string
+
+    var eventType events.EmittedEventType
     switch event.Proto {
     case syscall.IPPROTO_TCP:
-        typeStr = "TCP"
+        eventType = events.IPC_EVENT_LOOPBACK_SOCK_TCP
     case syscall.IPPROTO_UDP:
-        typeStr = "DGRAM"
+        eventType = events.IPC_EVENT_LOOPBACK_SOCK_UDP
     default:
-        // TODO: handle error
         return fmt.Errorf("unix ipc event had unexpected proto %d", event.Proto)
     }
-    // TODO: map dst inode to dst pid
-    fmt.Printf("LOOPBACK SOCK %v: %v --> %s (inode %v) from port %v to port %v (%d bytes)\n",
-        typeStr,
-        event.SrcPid,
-        dstPidStr,
-        event.DstInode,
-        event.SrcPort,
-        event.DstPort,
-        event.Count)
-
-    return nil
+    e := events.IpcEvent{
+        Src: makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
+        Dst: makeIpcEndpointI(commId, dstPid, event.DstComm),
+        Type: eventType,
+        Timestamp: TsFromKtime(event.Timestamp),
+        Metadata: events.IpcMetadata{
+            events.IpcMetadataPair{Name: "src_port", Value: strconv.FormatUint((uint64)(event.SrcPort), 10)},
+            events.IpcMetadataPair{Name: "dst_port", Value: strconv.FormatUint((uint64)(event.DstPort), 10)},
+            events.IpcMetadataPair{Name: "dst_inode", Value: strconv.FormatUint(event.DstInode, 10)},
+            events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint(event.Count, 10)},
+        },
+        Bytes: eventBytes,
+    }
+    return events.EmitIpcEvent(e)
 }
 
-func CollectLoopbackIpc(module *bcc.Module, exit <-chan struct{}, sockId *SocketIdentifier) error {
+func CollectLoopbackIpc(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
+
     if (collectLoopbackTcp || collectLoopbackUdp) == false {
         return nil
     }
@@ -248,11 +293,14 @@ func CollectLoopbackIpc(module *bcc.Module, exit <-chan struct{}, sockId *Socket
         select {
         case perfData := <-perfChannel:
             var event loopbackSockIpcEvent
-            if err := binary.Read(bytes.NewBuffer(perfData), bcc.GetHostByteOrder(), &event); err != nil {
+            eventMetadata := perfData[:unsafe.Sizeof(event)]
+            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
                 return fmt.Errorf("failed to parse signal event: %w", err)
             }
-            // TODO: udp!
-            handleLoopbackSockIpcEvent(&event, sockId)
+            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+            if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
+                return fmt.Errorf("failed to handle loopback sock event: %w", err)
+            }
 
         case <- exit:
             return nil

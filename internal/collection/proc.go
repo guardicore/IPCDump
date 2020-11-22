@@ -14,6 +14,9 @@ import (
 // TODO: refactor to separate file
 func getStartTimeFromPidStateFile(pidStatPath string) (uint64, error) {
     procStat, err := ioutil.ReadFile(pidStatPath)
+    if err != nil {
+        return 0, err
+    }
     procStatStr := string(procStat)
     // avoid all sorts of ugly stuff that can happen when comm has unusual characters/spaces
     i := strings.LastIndex(procStatStr, ")")
@@ -32,6 +35,11 @@ func getStartTimeFromPidStateFile(pidStatPath string) (uint64, error) {
     }
 
     return startTime, nil
+}
+
+func isMagicSelfProcDir(dirName string) bool {
+    return dirName == "self" || dirName == "thread-self"
+
 }
 
 func ScanProcessSocketInodes() (map[uint64]inodeProcessInfo, error) {
@@ -58,7 +66,7 @@ func ScanProcessSocketInodes() (map[uint64]inodeProcessInfo, error) {
         procDir := filepath.Dir(filepath.Dir(d))
         _, pidStr := path.Split(procDir)
 
-        if pidStr == "self" || pidStr == "thread-self" {
+        if isMagicSelfProcDir(pidStr) {
             continue
         }
 
@@ -86,3 +94,37 @@ func ScanProcessSocketInodes() (map[uint64]inodeProcessInfo, error) {
     }
     return inodeProcInfoMap, nil
 }
+
+func ScanProcessComms() (map[uint64]string, error) {
+    matches, err := filepath.Glob("/proc/*/comm")
+    if err != nil {
+        return nil, fmt.Errorf("failed to scan process comms: %w\n", err)
+    }
+
+    pidCommMap := make(map[uint64]string)
+    for _, commPath := range matches {
+        comm, err := ioutil.ReadFile(commPath)
+        if err != nil {
+            if !os.IsNotExist(err) {
+                return nil, fmt.Errorf("failed read process comm at %s: %w\n", commPath, err)
+            }
+            continue
+        }
+
+        baseDir := filepath.Dir(commPath)
+        _, pidStr := path.Split(baseDir)
+
+        if isMagicSelfProcDir(pidStr) {
+            continue
+        }
+
+        pid, err := strconv.ParseUint(pidStr, 10, 0)
+        if err != nil {
+            return nil, fmt.Errorf("warning: failed to parse pid %s: %w\n", pidStr, err)
+        }
+
+        pidCommMap[pid] = strings.TrimSpace(string(comm))
+    }
+    return pidCommMap, nil
+}
+
