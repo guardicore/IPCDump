@@ -180,9 +180,9 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
 `
 
 type loopbackSockIpcEvent struct {
-	SrcPid uint64
+    SrcPid uint64
     SrcComm [16]byte
-	DstPid uint64
+    DstPid uint64
     DstComm [16]byte
     Count uint64
     DstInode uint64

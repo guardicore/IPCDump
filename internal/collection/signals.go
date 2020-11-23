@@ -58,7 +58,7 @@ int trace_signal_generate(struct signal_generate_args_t *args) {
 
 type signalIpcEvent struct {
     Sig uint64
-	SrcPid uint64
+    SrcPid uint64
     SrcComm [16]byte
     DstPid uint64
     DstComm [16]byte

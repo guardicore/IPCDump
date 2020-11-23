@@ -390,10 +390,10 @@ const (
 )
 
 type unixSockIpcEvent struct {
-	SrcPid uint64
-	SrcComm [16]byte
+    SrcPid uint64
+    SrcComm [16]byte
     DstPid uint64
-	DstComm [16]byte
+    DstComm [16]byte
     Count uint64
     SrcInode uint64
     Timestamp uint64

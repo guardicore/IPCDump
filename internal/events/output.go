@@ -39,8 +39,8 @@ type jsonIpcEventFormat struct {
 
 // TODO: allow non-string types as well
 func (m IpcMetadata) MarshalJSON() ([]byte, error) {
-	buf := &bytes.Buffer{}
-	buf.WriteString("{")
+    buf := &bytes.Buffer{}
+    buf.WriteString("{")
     if len(m) > 0 {
         buf.WriteString(fmt.Sprintf("%q:%q", m[0].Name, m[0].Value))
         for _, p := range m[1:] {
@@ -48,7 +48,7 @@ func (m IpcMetadata) MarshalJSON() ([]byte, error) {
         }
     }
     buf.WriteString("}")
-	return buf.Bytes(), nil
+    return buf.Bytes(), nil
 }
 
 
