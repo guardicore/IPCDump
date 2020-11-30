@@ -170,18 +170,19 @@ func CollectPtyWrites(module *bcc.Module, exit <-chan struct{}, commId *CommIden
     perfMap.Start()
     defer perfMap.Stop()
 
-    kprobe, err := module.LoadKprobe("probe_pty_write")
+    kprobe, err := module.LoadKprobe("retprobe_pty_write");
+    if err != nil {
+        return err
+    }
+    if err = module.AttachKretprobe("pty_write", kprobe, -1); err != nil {
+        return err
+    }
+
+    kprobe, err = module.LoadKprobe("probe_pty_write")
     if err != nil {
         return err
     }
     if err := module.AttachKprobe("pty_write", kprobe, -1); err != nil {
-        return err
-    }
-
-    if kprobe, err = module.LoadKprobe("retprobe_pty_write"); err != nil {
-        return err
-    }
-    if err = module.AttachKretprobe("pty_write", kprobe, -1); err != nil {
         return err
     }
 
