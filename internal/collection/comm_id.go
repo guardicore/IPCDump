@@ -2,9 +2,9 @@ package collection
 
 import (
     "fmt"
-    "strings"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
+    "github.com/guardicode/ipcdump/internal/events"
 )
 
 const commSource = `
@@ -131,7 +131,7 @@ func NewCommIdentifier(module *bcc.Module) (*CommIdentifier, error) {
 }
 
 func (c CommIdentifier) CommForPid(pid int64, comm [16]byte) string {
-    str := strings.TrimRight(string(comm[:]), "\x00")
+    str := commStr(comm)
     if len(str) != 0 {
         return str
     }
@@ -146,5 +146,14 @@ func (c CommIdentifier) CommForPid(pid int64, comm [16]byte) string {
     }
 
     return scannedComm
+}
+
+func makeIpcEndpointI(commId *CommIdentifier, pid int64, comm [16]byte) events.IpcEndpoint {
+    return events.IpcEndpoint{Pid: pid,
+        Comm: commId.CommForPid(pid, comm)}
+}
+
+func makeIpcEndpoint(commId *CommIdentifier, pid uint64, comm [16]byte) events.IpcEndpoint {
+    return makeIpcEndpointI(commId, (int64)(pid), comm)
 }
 

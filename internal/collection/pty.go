@@ -4,7 +4,6 @@ import (
     "fmt"
     "unsafe"
     "bytes"
-    "strings"
     "strconv"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
@@ -135,7 +134,7 @@ func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommId
         return nil
     }
 
-    ttyName := strings.TrimRight(string(event.TtyName[:]), "\x00")
+    ttyName := nullStr(event.TtyName[:])
     e := events.IpcEvent{
         Src: makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
         Dst: makeIpcEndpoint(commId, event.DstPid, event.DstComm),

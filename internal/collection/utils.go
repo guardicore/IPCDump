@@ -1,15 +1,13 @@
 package collection
 
 import (
-    "github.com/guardicode/ipcdump/internal/events"
+    "strings"
 )
 
-func makeIpcEndpointI(commId *CommIdentifier, pid int64, comm [16]byte) events.IpcEndpoint {
-    return events.IpcEndpoint{Pid: pid,
-        Comm: commId.CommForPid(pid, comm)}
+func nullStr(s []byte) string {
+    return strings.TrimRight(string(s), "\x00")
 }
 
-func makeIpcEndpoint(commId *CommIdentifier, pid uint64, comm [16]byte) events.IpcEndpoint {
-    return makeIpcEndpointI(commId, (int64)(pid), comm)
+func commStr(comm [16]byte) string {
+    return nullStr(comm[:])
 }
-
