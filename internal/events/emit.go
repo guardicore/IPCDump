@@ -18,6 +18,7 @@ const (
     IPC_EVENT_PTY_WRITE = "pty"
     IPC_EVENT_LOOPBACK_SOCK_TCP = "loopback-tcp"
     IPC_EVENT_LOOPBACK_SOCK_UDP = "loopback-udp"
+    IPC_EVENT_PIPE = "pipe"
 )
 
 type IpcMetadataPair struct {

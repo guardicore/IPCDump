@@ -59,7 +59,7 @@ func main() {
     flag.Var(&filterBySrcPids, "s", "filter by source pid (can be specified more than once)")
     flag.Var(&filterByDstPids, "d", "filter by dest pid (can be specified more than once)")
     flag.Var(&filterByPids, "p", "filter by pid (either source or dest, can be specified more than once)")
-    flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  p|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp")
+    flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  t|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp  p|pipe")
     flag.StringVar(&outputFormat, "f", "text", "<text|json> output format (default is text)")
 
     flag.Parse()
@@ -70,6 +70,7 @@ func main() {
     var collectPtys = false
     var collectLoopbackTcp = false
     var collectLoopbackUdp = false
+    var collectPipes = false
 
     var collectAllTypes = len(filterByTypes) == 0
     if !collectAllTypes {
@@ -144,7 +145,7 @@ func main() {
                 collectUnixStreams = true
                 collectUnixDgrams = true
 
-            case "p":
+            case "t":
                 fallthrough
             case "pty":
                 collectPtys = true
@@ -164,6 +165,11 @@ func main() {
             case "loopback":
                 collectLoopbackTcp = true
                 collectLoopbackUdp = true
+
+            case "p":
+                fallthrough
+            case "pipe":
+                collectPipes = true
 
             default:
                 fmt.Fprintf(os.Stderr, "unrecognized filter type \"%s\"\n", filterType)
@@ -225,11 +231,19 @@ func main() {
         }
     }
 
+    if collectPipes {
+        if err := collection.InitPipeIpcCollection(bpfBuilder); err != nil {
+            fmt.Fprintf(os.Stderr, "failed to initialize pipe ipc collection: %v\n", err)
+            os.Exit(1)
+        }
+    }
+
     bpfModule, err := bpfBuilder.LoadModule()
     if err != nil {
         fmt.Fprintf(os.Stderr, "failed to load bpf module: %v\n", err)
         os.Exit(1)
     }
+    fmt.Fprintf(os.Stderr, "bpf module loaded successfully\n")
 
     commId, err := collection.NewCommIdentifier(bpfModule)
     if err != nil {
@@ -293,6 +307,16 @@ func main() {
         }()
     }
 
+    if collectPipes {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            if err := collection.CollectPipeIpc(bpfModule, exitChannel); err != nil {
+                fmt.Fprintf(os.Stderr, "pipe ipc collection failed: %v\n", err)
+                os.Exit(1)
+            }
+        }()
+    }
     sig := make(chan os.Signal, 1)
     signal.Notify(sig, os.Interrupt, os.Kill)
 
