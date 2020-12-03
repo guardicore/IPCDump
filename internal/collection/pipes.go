@@ -174,7 +174,6 @@ ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter
             bpf_trace_printk("failed to copy iov in probe_pipe_read()\n");
             return 0;
         }
-        bpf_trace_printk("probe_pipe_read(): iov_count %d\n", call.arg_iov.count);
         call.d.src_pid = running_write->pid;
         if (bpf_probe_read(call.d.src_comm, sizeof(call.d.src_comm), running_write->comm)) {
             bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", call.d.src_pid);
@@ -214,7 +213,6 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
         pipe_reads_by_pid_arr.delete(&pkey);
         return 0;
     }
-    bpf_trace_printk("retprobe_pipe_read(): iov_count %d\n", read_call->arg_iov.count);
 
     ssize_t res = PT_REGS_RC(ctx);
     if (res <= 0) {
@@ -237,7 +235,6 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
             }
             #endif
 
-            bpf_trace_printk("GOING TO SUBMIT FROM READ %d (%d)\n", bpf_get_current_pid_tgid() >> 32, bpf_get_current_pid_tgid());
             pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
         }
     }
@@ -260,7 +257,6 @@ ssize_t probe_pipe_write(struct pt_regs *ctx, struct kiocb *iocb, struct iov_ite
             bpf_trace_printk("failed to copy iov in probe_pipe_write()\n");
             return 0;
         }
-        bpf_trace_printk("probe_pipe_write(): iov_count %d\n", call.arg_iov.count);
         call.d.dst_pid = running_read->pid;
         if (bpf_probe_read(call.d.dst_comm, sizeof(call.d.dst_comm), running_read->comm)) {
             bpf_trace_printk("warning: failed to copy running read's destination comm for pid %d\n", call.d.dst_pid);
@@ -301,8 +297,6 @@ ssize_t retprobe_pipe_write(struct pt_regs *ctx) {
         return 0;
     }
 
-    bpf_trace_printk("retprobe_pipe_write(): iov_count %d\n", write_call->arg_iov.count);
-
     ssize_t res = PT_REGS_RC(ctx);
     if (res <= 0) {
         pipe_writes_by_pid_arr.delete(&pkey);
@@ -324,7 +318,6 @@ ssize_t retprobe_pipe_write(struct pt_regs *ctx) {
             }
             #endif
 
-            bpf_trace_printk("GOING TO SUBMIT FROM WRITE %d (%d)\n", bpf_get_current_pid_tgid() >> 32, bpf_get_current_pid_tgid());
             pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
         }
     }
