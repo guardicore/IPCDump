@@ -4,7 +4,6 @@ import (
     "fmt"
     "unsafe"
     "bytes"
-    "strconv"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
@@ -367,8 +366,8 @@ func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte) error {
         Timestamp: TsFromKtime(event.Timestamp),
         Metadata: events.IpcMetadata{
             events.IpcMetadataPair{Name: "pipe_name", Value: pipeName},
-            events.IpcMetadataPair{Name: "pipe_inode", Value: strconv.FormatUint((uint64)(event.PipeInode), 10)},
-            events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint((uint64)(event.Count), 10)},
+            events.IpcMetadataPair{Name: "pipe_inode", Value: event.PipeInode},
+            events.IpcMetadataPair{Name: "count", Value: event.Count},
         },
         Bytes: eventBytes,
     }

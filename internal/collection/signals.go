@@ -5,7 +5,6 @@ import (
     "bytes"
     "encoding/binary"
     "syscall"
-    "strconv"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
     "github.com/guardicode/ipcdump/internal/events"
@@ -73,7 +72,7 @@ func handleSignalEvent(event *signalIpcEvent, commId *CommIdentifier) error {
         Type: events.IPC_EVENT_SIGNAL,
         Timestamp: TsFromKtime(event.Timestamp),
         Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "num", Value: strconv.FormatUint(event.Sig, 10)},
+            events.IpcMetadataPair{Name: "num", Value: event.Sig},
             events.IpcMetadataPair{Name: "name", Value: signalNum.String()},
         },
     }

@@ -6,7 +6,6 @@ import (
     "bytes"
     "syscall"
     "encoding/binary"
-    "strconv"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
     "github.com/guardicode/ipcdump/internal/events"
@@ -242,10 +241,10 @@ func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, 
         Type: eventType,
         Timestamp: TsFromKtime(event.Timestamp),
         Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "src_port", Value: strconv.FormatUint((uint64)(event.SrcPort), 10)},
-            events.IpcMetadataPair{Name: "dst_port", Value: strconv.FormatUint((uint64)(event.DstPort), 10)},
-            events.IpcMetadataPair{Name: "dst_inode", Value: strconv.FormatUint(event.DstInode, 10)},
-            events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint(event.Count, 10)},
+            events.IpcMetadataPair{Name: "src_port", Value: event.SrcPort},
+            events.IpcMetadataPair{Name: "dst_port", Value: event.DstPort},
+            events.IpcMetadataPair{Name: "dst_inode", Value: event.DstInode},
+            events.IpcMetadataPair{Name: "count", Value: event.Count},
         },
         Bytes: eventBytes,
     }

@@ -4,7 +4,6 @@ import (
     "fmt"
     "unsafe"
     "bytes"
-    "strconv"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
@@ -142,8 +141,8 @@ func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommId
         Timestamp: TsFromKtime(event.Timestamp),
         Metadata: events.IpcMetadata{
             events.IpcMetadataPair{Name: "tty_name", Value: ttyName},
-            events.IpcMetadataPair{Name: "dst_sid", Value: strconv.FormatUint((uint64)(event.DstSid), 10)},
-            events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint((uint64)(event.Count), 10)},
+            events.IpcMetadataPair{Name: "dst_sid", Value: event.DstSid},
+            events.IpcMetadataPair{Name: "count", Value: event.Count},
         },
         Bytes: eventBytes,
     }

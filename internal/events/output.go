@@ -37,15 +37,20 @@ type jsonIpcEventFormat struct {
 }
 
 
-// TODO: allow non-string types as well
 func (m IpcMetadata) MarshalJSON() ([]byte, error) {
     buf := &bytes.Buffer{}
     buf.WriteString("{")
-    if len(m) > 0 {
-        buf.WriteString(fmt.Sprintf("%q:%q", m[0].Name, m[0].Value))
-        for _, p := range m[1:] {
-            buf.WriteString(fmt.Sprintf(",%q:%q", p.Name, p.Value))
+    for i, p := range m {
+        if i > 0 {
+            buf.WriteString(",")
         }
+        buf.WriteString(fmt.Sprintf("%q:", p.Name))
+        marshaledVal, err := json.Marshal(p.Value)
+        if err != nil {
+            return nil, fmt.Errorf("failed to marshal ipc metadata with name \"%v\" and value \"%v\": %w",
+                p.Name, p.Value, err)
+        }
+        buf.Write(marshaledVal)
     }
     buf.WriteString("}")
     return buf.Bytes(), nil
@@ -84,9 +89,9 @@ func outputEmittedIpcEventText(e IpcEvent) error {
     fmt.Printf("%s %s(%s) > %s(%s)", e.Type,
         pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
     if e.Metadata != nil && len(e.Metadata) > 0 {
-        fmt.Printf(": %s %s", e.Metadata[0].Name, e.Metadata[0].Value)
+        fmt.Printf(": %s %v", e.Metadata[0].Name, e.Metadata[0].Value)
         for _, m := range e.Metadata[1:] {
-            fmt.Printf(", %s %s", m.Name, m.Value)
+            fmt.Printf(", %s %v", m.Name, m.Value)
         }
         fmt.Printf("\n")
     }

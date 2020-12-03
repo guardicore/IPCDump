@@ -23,7 +23,7 @@ const (
 
 type IpcMetadataPair struct {
     Name string
-    Value string
+    Value interface{}
 }
 
 type IpcMetadata []IpcMetadataPair

@@ -5,7 +5,6 @@ import (
     "bytes"
     "unsafe"
     "strings"
-    "strconv"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
@@ -425,14 +424,14 @@ func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *
 
     metadata := events.IpcMetadata{
         events.IpcMetadataPair{Name: "path", Value: path},
-        events.IpcMetadataPair{Name: "count", Value: strconv.FormatUint(event.Count, 10)},
+        events.IpcMetadataPair{Name: "count", Value: event.Count},
     }
 
 
     srcPid := (int64)(event.SrcPid)
     if eventType == events.IPC_EVENT_UNIX_SOCK_DGRAM {
         metadata = append(metadata,
-            events.IpcMetadataPair{Name: "src_inode", Value: strconv.FormatUint(event.SrcInode, 10)})
+            events.IpcMetadataPair{Name: "src_inode", Value: event.SrcInode})
         if srcPid <= 0 {
             srcPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.SrcInode)
             if !ok {
