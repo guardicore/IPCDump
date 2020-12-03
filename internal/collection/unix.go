@@ -223,6 +223,38 @@ int probe_skb_copy_datagram_from_iter(struct pt_regs *ctx,
     return 0;
 }
 
+static inline int fill_and_submit_unix_event(struct pt_regs *ctx, const struct unix_sock_ipc_metadata_t *event_metadata, const struct sk_buff *skb) __attribute__((always_inline));
+static inline int fill_and_submit_unix_event(struct pt_regs *ctx, const struct unix_sock_ipc_metadata_t *event_metadata, const struct sk_buff *skb) {
+    int ekey = 0;
+    struct unix_sock_ipc_data_t *e = working_unix_event_arr.lookup(&ekey);
+    if (!e) {
+        bpf_trace_printk("failed to get working unix ipc event in fill_and_submit_unix_event()\n");
+        return 0;
+    }
+
+    if (bpf_probe_read(&e->d, sizeof(e->d), event_metadata)) {
+        bpf_trace_printk("failed to copy unix ipc event metadata in fill_and_submit_unix_event()\n");
+        return 0;
+    }
+
+    #ifdef COLLECT_IPC_BYTES
+    unsigned char *head_ptr = NULL;
+    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head)) {
+        bpf_trace_printk("failed to get unix socket head ptr in fill_and_submit_unix_event()\n");
+        return 0;
+    }
+
+    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
+    if (bpf_probe_read(e->bytes, e->bytes_len, head_ptr)) {
+        bpf_trace_printk("failed to copy unix ipc event stream bytes in fill_and_submit_unix_event()\n");
+    }
+    #endif
+
+    unix_events.perf_submit(ctx, e, EVENT_SIZE(e));
+
+    return 0;
+}
+
 // this is called once per skb_copy_datagram_from_iter(), which *may be more* than once per sendmsg().
 int retprobe_skb_copy_datagram_from_iter(struct pt_regs *ctx) {
 
@@ -243,32 +275,9 @@ int retprobe_skb_copy_datagram_from_iter(struct pt_regs *ctx) {
 
     event_metadata->count = skb->len;
 
-    int ekey = 0;
-    struct unix_sock_ipc_data_t *e = working_unix_event_arr.lookup(&ekey);
-    if (!e) {
-        bpf_trace_printk("failed to get working unix ipc event in retprobe_skb_copy_datagram_from_iter()\n");
-        return 0;
+    if (fill_and_submit_unix_event(ctx, event_metadata, skb)) {
+        bpf_trace_printk("failed to fill and submit unix ipc event in retprobe_skb_copy_datagram_from_iter()\n");
     }
-
-    if (bpf_probe_read(&e->d, sizeof(e->d), event_metadata)) {
-        bpf_trace_printk("failed to copy unix ipc event metadata in retprobe_skb_copy_datagram_from_iter()\n");
-        return 0;
-    }
-
-    #ifdef COLLECT_IPC_BYTES
-    unsigned char *head_ptr = NULL;
-    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head)) {
-        bpf_trace_printk("failed to get unix socket head ptr in retprobe_skb_copy_datagram_from_iter()\n");
-        return 0;
-    }
-
-    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
-    if (bpf_probe_read(e->bytes, e->bytes_len, head_ptr)) {
-        bpf_trace_printk("failed to copy unix ipc event stream bytes in retprobe_skb_copy_datagram_from_iter()\n");
-    }
-    #endif
-
-    unix_events.perf_submit(ctx, e, EVENT_SIZE(e));
 
     return 0;
 }
@@ -279,9 +288,9 @@ int retprobe_unix_stream_sendmsg(struct pt_regs *ctx) {
 }
 
 int probe_unix_dgram_recvmsg(struct pt_regs *ctx,
-                             struct socket *sock,
-                             struct msghdr *msg,
-                             size_t len) {
+struct socket *sock,
+struct msghdr *msg,
+size_t len) {
     struct unix_sock_ipc_metadata_t *e = new_unix_event(UNIX_IPC_TYPE_DGRAM);
     if (!e) {
         bpf_trace_printk("failed to get new unix ipc event for probe_unix_dgram_recvmsg()\n");
@@ -338,34 +347,9 @@ int retprobe___skb_try_recv_datagram(struct pt_regs *ctx) {
 
     event_metadata->count = skb->len;
 
-    // TODO: refactor all of this common logic
-
-    int ekey = 0;
-    struct unix_sock_ipc_data_t *e = working_unix_event_arr.lookup(&ekey);
-    if (!e) {
-        bpf_trace_printk("failed to get working unix ipc event in retprobe___skb_try_recv_datagram()\n");
-        return 0;
+    if (fill_and_submit_unix_event(ctx, event_metadata, skb)) {
+        bpf_trace_printk("failed to fill and submit unix ipc event in retprobe___skb_try_recv_datagram()\n");
     }
-
-    if (bpf_probe_read(&e->d, sizeof(e->d), event_metadata)) {
-        bpf_trace_printk("failed to copy unix ipc event metadata in retprobe___skb_try_recv_datagram()\n");
-        return 0;
-    }
-
-    #ifdef COLLECT_IPC_BYTES
-    unsigned char *head_ptr = NULL;
-    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head)) {
-        bpf_trace_printk("failed to get unix socket head ptr in retprobe___skb_try_recv_datagram()\n");
-        return 0;
-    }
-
-    e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
-    if (bpf_probe_read(e->bytes, e->bytes_len, head_ptr)) {
-        bpf_trace_printk("failed to copy unix ipc event dgram bytes in retprobe___skb_try_recv_datagram()\n");
-    }
-    #endif
-
-    unix_events.perf_submit(ctx, e, EVENT_SIZE(e));
 
     return 0;
 }
