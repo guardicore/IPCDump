@@ -4,7 +4,6 @@ import (
     "fmt"
     "bytes"
     "unsafe"
-    "strings"
     "encoding/binary"
     "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
@@ -197,12 +196,7 @@ int probe_unix_stream_sendmsg(struct pt_regs *ctx,
     e->dst_pid = sock->sk->sk_peer_pid->numbers[0].nr;
     get_comm_for_pid(e->dst_pid, e->dst_comm, sizeof(e->dst_comm));
 
-    if (try_get_unix_socket_path(e->path, sizeof(e->path), sock)) {
-        char anonymous[] = "<anonymous>";
-        if (bpf_probe_read_str(e->path, sizeof(e->path), anonymous) < 0) {
-            bpf_trace_printk("failed to copy <anonymous> string in probe_unix_stream_sendmsg()\n");
-        }
-    }
+    try_get_unix_socket_path(e->path, sizeof(e->path), sock);
 
     return 0;
 }
@@ -298,15 +292,15 @@ int probe_unix_dgram_recvmsg(struct pt_regs *ctx,
     e->type = UNIX_IPC_TYPE_DGRAM;
     e->dst_pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(e->dst_comm, sizeof(e->dst_comm));
-    struct msghdr msg_copy = {0};
-    // TODO: check result
-    bpf_probe_read(&msg_copy, sizeof(msg_copy), msg);
 
-    if (!try_get_unix_msghdr_path(e->path, sizeof(e->path), &msg_copy)) {
-    } else if (try_get_unix_socket_path(e->path, sizeof(e->path), sock)) {
-        // TODO: refactor
-        char anonymous[] = "<anonymous>";
-        bpf_probe_read_str(e->path, sizeof(e->path), anonymous);
+    struct msghdr msg_copy = {0};
+    if (bpf_probe_read(&msg_copy, sizeof(msg_copy), msg)) {
+        bpf_trace_printk("failed to copy msghdr in probe_unix_dgram_recvmsg()\n");
+        return 0;
+    }
+
+    if (try_get_unix_msghdr_path(e->path, sizeof(e->path), &msg_copy)) {
+        try_get_unix_socket_path(e->path, sizeof(e->path), sock);
     }
 
     return 0;
@@ -420,7 +414,10 @@ func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *
         return fmt.Errorf("unix ipc event had unexpected type %d", event.Type)
     }
 
-    path := strings.TrimRight(string(event.Path[:]), "\x00")
+    path := nullStr(event.Path[:])
+    if len(path) == 0 {
+        path = "<anonymous>"
+    }
 
     metadata := events.IpcMetadata{
         events.IpcMetadataPair{Name: "path", Value: path},
