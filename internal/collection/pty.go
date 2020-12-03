@@ -112,17 +112,24 @@ type ptyWriteEvent struct {
     BytesLen uint16
 }
 
+// TODO: revisit this list. the issue is that our terminal output recursively triggers this event,
+// so we end up with a bit of a mess unless we cancel out this out... there may be a better way
+// to do this than a blocklist.
+var spamComms = []string{"tmux: client"}
+
 func shouldSkipEvent(event *ptyWriteEvent) bool {
-    dstProcess, err := ps.FindProcess((int)(event.DstPid))
-    // TODO: revisit this
-    if err == nil && dstProcess != nil {
-        // TODO: add more spam to this list
-        if dstProcess.Executable() == "tmux: client" {
-            return true
-        }
-    }
     if (event.SrcPid == event.DstPid) {
         return true
+    }
+
+    dstProcess, err := ps.FindProcess((int)(event.DstPid))
+    if err == nil && dstProcess != nil {
+        comm := dstProcess.Executable()
+        for _, spamComm := range spamComms {
+            if comm == spamComm {
+                return true
+            }
+        }
     }
 
     return false
