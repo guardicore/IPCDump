@@ -25,12 +25,12 @@ BPF_PERF_OUTPUT(pipe_events);
 // 2) Read-within-write: the pipe is full. A call to pipe_write() blocks until the reader makes room.
 //
 // In case 1, we set up a new outer_pipe_io_t for the write event (with the writer's process info).
-// Then, when we reach the read event inside the write event, we save all the information we need in a new
+// Then, when we reach the read event inside the write event, we save all the information we need in a
 // pipe_io_call_t; the event is submitted when the *read* event returns. 
 // (The write event retprobe just does cleanup in this case.)
 //
 // Case 2 is exactly the opposite: a new outer_pipe_io_t is filled out for the initial read (reader's pid
-// info this time). The write event (pipe_write() called before pipe_read() returns) fills out a new
+// info this time). The write event (pipe_write() called before pipe_read() returns) fills out a
 // pipe_io_call_t, and on the retprobe from pipe_write() the new event is submitted. Finally, pipe_read()'s
 // retprobe does some cleanup for the initial outer_pipe_io_t.
 
@@ -72,8 +72,8 @@ BPF_HASH(pipe_writes_by_pid_arr, u64, struct pipe_io_call_t);
 
 #define PIPE_BUF_BYTES_SIZE ((int)(sizeof(((struct pipe_io_data_t*)NULL)->bytes)))
 
-static inline ssize_t collect_iov_bytes(unsigned char *buf, size_t buf_len, struct iov_iter *iter, ssize_t count) __attribute__((always_inline));
-static inline ssize_t collect_iov_bytes(unsigned char *buf, size_t buf_len, struct iov_iter *iter, ssize_t count) {
+static inline ssize_t collect_iov_bytes(unsigned char *buf, size_t buf_len, const struct iov_iter *iter, ssize_t count) __attribute__((always_inline));
+static inline ssize_t collect_iov_bytes(unsigned char *buf, size_t buf_len, const struct iov_iter *iter, ssize_t count) {
     struct iov_iter iter_copy = {0};
     if (bpf_probe_read(&iter_copy, sizeof(iter_copy), iter)) {
         bpf_trace_printk("failed to copy iov_iter in collect_iov_bytes()\n");
@@ -155,11 +155,16 @@ static inline int get_kiocb_name(const struct kiocb *iocb, char *name, size_t le
         return -1;
     }
 
+    // this is best effort (only fifos have names)
     bpf_probe_read_str(name, len, iocb->ki_filp->f_path.dentry->d_name.name);
     return 0;
 }
 
-// TODO: figure out how to refactor this
+static inline void fill_current_pid_comm(u64 *pid, char *comm, size_t comm_len) __attribute__((always_inline));
+static inline void fill_current_pid_comm(u64 *pid, char *comm, size_t comm_len) {
+    *pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(comm, comm_len);
+}
 
 ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *to) {
     struct pipe_io_call_t call = {0};
@@ -178,15 +183,12 @@ ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter
         if (bpf_probe_read(call.d.src_comm, sizeof(call.d.src_comm), running_write->comm)) {
             bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", call.d.src_pid);
         }
-        call.d.dst_pid = bpf_get_current_pid_tgid() >> 32;
-        bpf_get_current_comm(call.d.dst_comm, sizeof(call.d.dst_comm));
-
+        fill_current_pid_comm(&call.d.dst_pid, call.d.dst_comm, sizeof(call.d.dst_comm));
         get_kiocb_name(iocb, call.d.pipe_name, sizeof(call.d.pipe_name));
 
     } else {
         struct outer_pipe_io_t this_read = {0};
-        this_read.pid = bpf_get_current_pid_tgid() >> 32;
-        bpf_get_current_comm(this_read.comm, sizeof(this_read.comm));
+        fill_current_pid_comm(&this_read.pid, this_read.comm, sizeof(this_read.comm));
 
         running_pipe_reads.update(&call.d.pipe_inode, &this_read);
     }
@@ -194,6 +196,25 @@ ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter
     pipe_reads_by_pid_arr.update(&pkey, &call);
 
     return 0;
+}
+
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) __attribute__((always_inline));
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) {
+    int ekey = 0;
+    struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
+    if (e) {
+        if (!bpf_probe_read(&e->d, sizeof(e->d), &call->d)) {
+
+            #ifdef COLLECT_IPC_BYTES
+            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &call->arg_iov, e->d.count);
+            if (collected >= 0) {
+                e->bytes_len = BYTES_BUF_LEN(e, collected);
+            }
+            #endif
+
+            pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
+        }
+    }
 }
 
 ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
@@ -223,26 +244,11 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
     read_call->d.count = (u64)res;
     read_call->d.timestamp = bpf_ktime_get_ns();
 
-    int ekey = 0;
-    struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
-    if (e) {
-        if (!bpf_probe_read(&e->d, sizeof(e->d), &read_call->d)) {
-
-            #ifdef COLLECT_IPC_BYTES
-            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &read_call->arg_iov, e->d.count);
-            if (collected >= 0) {
-                e->bytes_len = BYTES_BUF_LEN(e, collected);
-            }
-            #endif
-
-            pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
-        }
-    }
+    fill_and_submit_pipe_io_event(ctx, read_call);
 
     pipe_reads_by_pid_arr.delete(&pkey);
     return 0;
 }
-
 
 ssize_t probe_pipe_write(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *from) {
     struct pipe_io_call_t call = {0};
@@ -261,15 +267,12 @@ ssize_t probe_pipe_write(struct pt_regs *ctx, struct kiocb *iocb, struct iov_ite
         if (bpf_probe_read(call.d.dst_comm, sizeof(call.d.dst_comm), running_read->comm)) {
             bpf_trace_printk("warning: failed to copy running read's destination comm for pid %d\n", call.d.dst_pid);
         }
-        call.d.src_pid = bpf_get_current_pid_tgid() >> 32;
-        bpf_get_current_comm(call.d.src_comm, sizeof(call.d.dst_comm));
-
+        fill_current_pid_comm(&call.d.src_pid, call.d.src_comm, sizeof(call.d.src_comm));
         get_kiocb_name(iocb, call.d.pipe_name, sizeof(call.d.pipe_name));
 
     } else {
         struct outer_pipe_io_t this_write = {0};
-        this_write.pid = bpf_get_current_pid_tgid() >> 32;
-        bpf_get_current_comm(this_write.comm, sizeof(this_write.comm));
+        fill_current_pid_comm(&this_write.pid, this_write.comm, sizeof(this_write.comm));
 
         running_pipe_writes.update(&call.d.pipe_inode, &this_write);
     }
@@ -306,21 +309,7 @@ ssize_t retprobe_pipe_write(struct pt_regs *ctx) {
     write_call->d.count = (u64)res;
     write_call->d.timestamp = bpf_ktime_get_ns();
 
-    int ekey = 0;
-    struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
-    if (e) {
-        if (!bpf_probe_read(&e->d, sizeof(e->d), &write_call->d)) {
-
-            #ifdef COLLECT_IPC_BYTES
-            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &write_call->arg_iov, e->d.count);
-            if (collected >= 0) {
-                e->bytes_len = BYTES_BUF_LEN(e, collected);
-            }
-            #endif
-
-            pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
-        }
-    }
+    fill_and_submit_pipe_io_event(ctx, write_call);
 
     pipe_reads_by_pid_arr.delete(&pkey);
     return 0;

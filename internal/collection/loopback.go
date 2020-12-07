@@ -86,7 +86,6 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
         return 0;
     }
 
-    // TODO: tcp6
     e->d.proto = IPPROTO_TCP;
     e->d.src_port = src_port;
     e->d.dst_port = dst_port;
@@ -112,7 +111,6 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
     return 0;
 }
 
-// TODO: consider using netif_rx tracepoint instead for a more stable api
 int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
                             struct sock *sk,
                             struct sk_buff *skb) {
@@ -150,7 +148,6 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
         return 0;
     }
 
-    // TODO: udp6
     e->d.proto = IPPROTO_UDP;
     e->d.src_port = src_port;
     e->d.dst_port = dst_port;

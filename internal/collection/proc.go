@@ -11,7 +11,7 @@ import (
     "io/ioutil"
 )
 
-// TODO: refactor to separate file
+
 func getStartTimeFromPidStateFile(pidStatPath string) (uint64, error) {
     procStat, err := ioutil.ReadFile(pidStatPath)
     if err != nil {
