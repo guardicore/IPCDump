@@ -1,6 +1,7 @@
 package main
 
 import (
+    "time"
     "github.com/guardicode/ipcdump/internal/collection"
     "github.com/guardicode/ipcdump/internal/bpf"
     "github.com/guardicode/ipcdump/internal/events"
@@ -321,8 +322,23 @@ func main() {
     signal.Notify(sig, os.Interrupt, os.Kill)
 
     <-sig
+
+    fmt.Fprintf(os.Stderr, "\n\ngot signal, unloading bpf module...\n\n")
+    bpfModule.Close()
+
+    // yes, this is stupid. unfortunately closing the module doesn't guarantee that the perf channels
+    // for bpf events stop getting new events, and if the channel buffer fills up, the call to
+    // perfTable.poll() blocks indefinitely inside C.perf_reader_poll() (rawCallback() blocks on the
+    // write to the the perf channel). since poll() is also in charge of halting the goroutine that
+    // Start() launched, this hang blocks it from processing the call to Stop() (which writes to a
+    // channel whose other end is handled by poll()). this time.Sleep() (mostly) mitigates this issue
+    // by giving the perf event handlers time to empty the remaining events before calling Stop().
+    time.Sleep(1 * time.Second)
     close(exitChannel)
+
+    fmt.Fprintf(os.Stderr, "\n\ncleaning up...\n\n")
     wg.Wait()
+    fmt.Fprintf(os.Stderr, "\n\ndone.\n\n")
 }
 
 

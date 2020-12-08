@@ -456,7 +456,7 @@ func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, commId *Comm
         return nil
     }
 
-    perfChannel := make(chan []byte, 32)
+    perfChannel := make(chan []byte, 1024)
     table := bcc.NewTable(module.TableId("unix_events"), module)
     perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
     if err != nil {
