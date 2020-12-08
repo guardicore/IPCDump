@@ -166,6 +166,25 @@ static inline void fill_current_pid_comm(u64 *pid, char *comm, size_t comm_len) 
     bpf_get_current_comm(comm, comm_len);
 }
 
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) __attribute__((always_inline));
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) {
+    int ekey = 0;
+    struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
+    if (e) {
+        if (!bpf_probe_read(&e->d, sizeof(e->d), &call->d)) {
+
+            #ifdef COLLECT_IPC_BYTES
+            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &call->arg_iov, e->d.count);
+            if (collected >= 0) {
+                e->bytes_len = BYTES_BUF_LEN(e, collected);
+            }
+            #endif
+
+            pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
+        }
+    }
+}
+
 ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *to) {
     struct pipe_io_call_t call = {0};
     if (get_kiocb_inode(iocb, &call.d.pipe_inode)) {
@@ -196,25 +215,6 @@ ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter
     pipe_reads_by_pid_arr.update(&pkey, &call);
 
     return 0;
-}
-
-static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) __attribute__((always_inline));
-static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) {
-    int ekey = 0;
-    struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
-    if (e) {
-        if (!bpf_probe_read(&e->d, sizeof(e->d), &call->d)) {
-
-            #ifdef COLLECT_IPC_BYTES
-            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &call->arg_iov, e->d.count);
-            if (collected >= 0) {
-                e->bytes_len = BYTES_BUF_LEN(e, collected);
-            }
-            #endif
-
-            pipe_events.perf_submit(ctx, e, EVENT_SIZE(e));
-        }
-    }
 }
 
 ssize_t retprobe_pipe_read(struct pt_regs *ctx) {

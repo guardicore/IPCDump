@@ -167,6 +167,7 @@ func InitPtyWriteCollection(bpfBuilder *bpf.BpfBuilder) error {
 
 func CollectPtyWrites(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier) error {
     perfChannel := make(chan []byte, 1024)
+
     table := bcc.NewTable(module.TableId("pty_events"), module)
     perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
     if err != nil {
