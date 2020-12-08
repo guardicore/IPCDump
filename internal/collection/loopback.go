@@ -48,37 +48,36 @@ BPF_PERF_OUTPUT(loopback_events);
 
 BPF_PERCPU_ARRAY(working_loopback_event_arr, struct loopback_sock_ipc_t, 1);
 
-// TODO: refactor tcp+udp
-int probe_tcp_rcv_established(struct pt_regs *ctx,
-                              struct sock *sk,
-                              struct sk_buff *skb) {
-
-    u64 src_pid = bpf_get_current_pid_tgid() >> 32;
-    if (src_pid == 0) {
-        return 0;
+static inline int should_skip_packet(u64 pid, const struct sk_buff *skb) {
+    if (pid == 0) {
+        return 1;
     }
 
     if (skb->skb_iif != LOOPBACK_IFINDEX) {
-        return 0;
+        return 1;
     }
 
+    return 0;
+}
+
+static inline unsigned char *get_transport_addr(const struct sk_buff *skb) __attribute__((always_inline));
+static inline unsigned char *get_transport_addr(const struct sk_buff *skb) {
     unsigned char *head_ptr = NULL;
     u16 transport_header = 0;
 
-    // TODO: this mess is because bcc is being ornary. refactor
-    bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head);
-    bpf_probe_read(&transport_header, sizeof(transport_header), &skb->transport_header);
+    if (bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head) ||
+        bpf_probe_read(&transport_header, sizeof(transport_header), &skb->transport_header)) {
 
-    struct tcphdr tcp_copy = {0};
-    bpf_probe_read(&tcp_copy, sizeof(tcp_copy), head_ptr + transport_header);
-
-    u16 src_port = ntohs(tcp_copy.source);
-    u16 dst_port = ntohs(tcp_copy.dest);
-
-    int64_t count = skb->len - tcp_copy.doff * 4;
-    if (count <= 0) {
-        return 0;
+        bpf_trace_printk("failed to read transport address from skb\n");
+        return NULL;
     }
+
+    return head_ptr + transport_header;
+}
+
+int probe_tcp_rcv_established(struct pt_regs *ctx,
+                              struct sock *sk,
+                              struct sk_buff *skb) {
 
     int ekey = 0;
     struct loopback_sock_ipc_t *e = working_loopback_event_arr.lookup(&ekey);
@@ -86,24 +85,42 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
         return 0;
     }
 
-    e->d.proto = IPPROTO_TCP;
-    e->d.src_port = src_port;
-    e->d.dst_port = dst_port;
-    e->d.src_pid = src_pid;
+    e->d.src_pid = bpf_get_current_pid_tgid() >> 32;
+    if (should_skip_packet(e->d.src_pid, skb)) {
+        return 0;
+    }
+
+    const struct tcphdr *tcp_ptr = (struct tcphdr*)get_transport_addr(skb);
+    if (tcp_ptr == NULL) {
+        return 0;
+    }
+
+    struct tcphdr tcp_copy = {0};
+    if (bpf_probe_read(&tcp_copy, sizeof(tcp_copy), tcp_ptr)) {
+        bpf_trace_printk("failed to copy tcp header in probe_tcp_rcv_established()\n");
+        return 0;
+    }
+
+    e->d.src_port = ntohs(tcp_copy.source);
+    e->d.dst_port = ntohs(tcp_copy.dest);
+
+    int64_t count = skb->len - tcp_copy.doff * 4;
+    if (count <= 0) {
+        return 0;
+    }
     e->d.count = count;
+
+    e->d.proto = IPPROTO_TCP;
     e->d.timestamp = bpf_ktime_get_ns();
     bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
-    // stack alignment :(
-    u64 dst_pid = 0;
-    get_pid_for_sock(&dst_pid, sk);
-    e->d.dst_pid = dst_pid;
+    get_pid_for_sock(&e->d.dst_pid, sk);
     get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
     e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
     #ifdef COLLECT_IPC_BYTES
     e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
-    bpf_probe_read(e->bytes, e->bytes_len, head_ptr + transport_header + tcp_copy.doff * 4);
+    bpf_probe_read(e->bytes, e->bytes_len, (unsigned char*)tcp_ptr + tcp_copy.doff * 4);
     #endif
 
     loopback_events.perf_submit(ctx, e, EVENT_SIZE(e));
@@ -115,57 +132,47 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
                             struct sock *sk,
                             struct sk_buff *skb) {
 
-    u64 src_pid = bpf_get_current_pid_tgid() >> 32;
-    if (src_pid == 0) {
-        return 0;
-    }
-
-    if (skb->skb_iif != LOOPBACK_IFINDEX) {
-        return 0;
-    }
-
-    unsigned char *head_ptr = NULL;
-    u16 transport_header = 0;
-
-    // TODO: this mess is because bcc is being ornary. refactor
-    bpf_probe_read(&head_ptr, sizeof(head_ptr), &skb->head);
-    bpf_probe_read(&transport_header, sizeof(transport_header), &skb->transport_header);
-
-    struct udphdr udp_copy = {0};
-    bpf_probe_read(&udp_copy, sizeof(udp_copy), head_ptr + transport_header);
-
-    u16 src_port = ntohs(udp_copy.source);
-    u16 dst_port = ntohs(udp_copy.dest);
-
-    int64_t count = ntohs(udp_copy.len);
-    if (count <= 0) {
-        return 0;
-    }
-
     int ekey = 0;
     struct loopback_sock_ipc_t *e = working_loopback_event_arr.lookup(&ekey);
     if (!e) {
         return 0;
     }
 
-    e->d.proto = IPPROTO_UDP;
-    e->d.src_port = src_port;
-    e->d.dst_port = dst_port;
-    e->d.src_pid = src_pid;
+    e->d.src_pid = bpf_get_current_pid_tgid() >> 32;
+    if (should_skip_packet(e->d.src_pid, skb)) {
+        return 0;
+    }
+
+    const struct udphdr *udp_ptr = (struct udphdr*)get_transport_addr(skb);
+    if (udp_ptr == NULL) {
+        return 0;
+    }
+    struct udphdr udp_copy = {0};
+    if (bpf_probe_read(&udp_copy, sizeof(udp_copy), udp_ptr)) {
+        bpf_trace_printk("failed to copy udp header in probe_udp_queue_rcv_skb()\n");
+        return 0;
+    }
+
+    e->d.src_port = ntohs(udp_copy.source);
+    e->d.dst_port = ntohs(udp_copy.dest);
+
+    int64_t count = ntohs(udp_copy.len);
+    if (count <= 0) {
+        return 0;
+    }
     e->d.count = count;
+
+    e->d.proto = IPPROTO_UDP;
     e->d.timestamp = bpf_ktime_get_ns();
     bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
-    // stack alignment :(
-    u64 dst_pid = 0;
-    get_pid_for_sock(&dst_pid, sk);
-    e->d.dst_pid = dst_pid;
+    get_pid_for_sock(&e->d.dst_pid, sk);
     get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
     e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
     #ifdef COLLECT_IPC_BYTES
     e->bytes_len = BYTES_BUF_LEN(e, e->d.count);
-    bpf_probe_read(e->bytes, e->bytes_len, head_ptr + transport_header + sizeof(udp_copy));
+    bpf_probe_read(e->bytes, e->bytes_len, udp_ptr + 1);
     #endif
 
     loopback_events.perf_submit(ctx, e, EVENT_SIZE(e));
@@ -204,7 +211,7 @@ func InitLoopbackIpcCollection(bpfBuilder *bpf.BpfBuilder, tcp bool, udp bool) e
         return err
     }
     bpfBuilder.AddSources(loopbackSource)
-    // TODO: fix these semantics!
+
     collectLoopbackTcp = tcp
     collectLoopbackUdp = udp
     return nil
