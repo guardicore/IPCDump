@@ -12,40 +12,6 @@ import (
     "sync"
 )
 
-// TODO: refactor out MAX_EVENT_SIZE
-var bpfUtilSource = `
-#ifdef COLLECT_IPC_BYTES
-
-#define MAX_EVENT_SIZE 0x8000
-#define REMAINING_BYTES_BUFFER(t) \
-    u16 bytes_len; \
-    u16 pad0;  \
-    u16 pad1;  \
-    u16 pad2;  \
-    unsigned char bytes[MAX_EVENT_SIZE-sizeof(u64)-sizeof(t)]
-
-
-#ifndef COLLECT_IPC_BYTES_MAX
-#define COLLECT_IPC_BYTES_MAX (MAX_EVENT_SIZE)
-#endif
-
-#define BYTES_BUF_LEN(e, count) ((u16)(min(min((u64)sizeof((e)->bytes), (u64)(count)), (u64)(COLLECT_IPC_BYTES_MAX))))
-#define EVENT_SIZE(e) ((u32)(min(offsetof(typeof(*e), bytes) + (e)->bytes_len, (unsigned long)MAX_EVENT_SIZE)))
-
-
-#else  // !COLLECT_IPC_BYTES
-
-
-#define REMAINING_BYTES_BUFFER(t) \
-    u16 bytes_len_always_zero; \
-    u16 pad0; \
-    u16 pad1; \
-    u16 pad2
-#define EVENT_SIZE(e) (sizeof(*(e)))
-
-#endif
-`
-
 func main() {
     var dumpBytes bool
     var dumpBytesMax uint
@@ -80,21 +46,10 @@ func main() {
         }
     }
 
-    if dumpBytes {
-        bytesLimit := -1
-        if dumpBytesMax != 0 {
-            bytesLimit = (int)(dumpBytesMax)
-        }
-        // TODO: check limit against 32k
-        if err := events.SetEmitOutputBytesLimit(bytesLimit); err != nil {
-            fmt.Fprintf(os.Stderr, "failed to set output bytes limit: %s\n", err)
-            os.Exit(1)
-        }
-    } else if dumpBytesMax != 0 {
+    if !dumpBytes && dumpBytesMax != 0 {
         fmt.Fprintf(os.Stderr, "cannot set output bytes limit if -x is not specified\n")
         os.Exit(1)
     }
-    // not dumping bytes is default behavior
 
     events.FilterBySrcPids(filterBySrcPids)
     events.FilterByDstPids(filterByDstPids)
@@ -179,17 +134,11 @@ func main() {
         }
     }
 
-
     bpfBuilder := bpf.NewBpfBuilder()
-
-    // TODO: refactor out
-    if dumpBytes {
-        bpfBuilder.AddSources("#define COLLECT_IPC_BYTES")
-        if dumpBytesMax > 0 {
-            bpfBuilder.AddSources(fmt.Sprintf("#define COLLECT_IPC_BYTES_MAX (%v)", dumpBytesMax))
-        }
+    if err := collection.SetupIpcBytesOutput(bpfBuilder, dumpBytes, dumpBytesMax); err != nil {
+        fmt.Fprintf(os.Stderr, "failed to set up ipc bytes output: %v\n", err)
+        os.Exit(1)
     }
-    bpfBuilder.AddSources(bpfUtilSource)
 
     collection.SetupCommCollectionBpf(bpfBuilder)
 
