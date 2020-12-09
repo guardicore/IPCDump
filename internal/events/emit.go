@@ -120,6 +120,11 @@ func isPidAllowed(srcPid int64, dstPid int64) bool {
     return false
 }
 
+var skipLostEvents = false
+func SetSkipLostIpcEvents(skip bool) {
+    skipLostEvents = skip
+}
+
 func EmitIpcEvent(event IpcEvent) error {
     if !isPidAllowed(event.Src.Pid, event.Dst.Pid) {
         return nil
@@ -132,6 +137,9 @@ func EmitIpcEvent(event IpcEvent) error {
 }
 
 func EmitLostIpcEvents(eventType EmittedEventType, lost uint64) error {
+    if skipLostEvents {
+        return nil
+    }
     return outputLostIpcEvents(eventType, lost, time.Now())
 }
 

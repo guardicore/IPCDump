@@ -20,6 +20,7 @@ func main() {
     var filterByPids uintArrayFlags
     var filterByTypes stringArrayFlags
     var outputFormat string
+    var skipLostEvents bool
 
     flag.BoolVar(&dumpBytes, "x", false, "dump IPC bytes where relevant (rather than just event details).")
     flag.UintVar(&dumpBytesMax, "B", 0, "max number of bytes to dump per event, or 0 for complete event (may be large). meaningful only if -x is specified.")
@@ -28,6 +29,7 @@ func main() {
     flag.Var(&filterByPids, "p", "filter by pid (either source or dest, can be specified more than once)")
     flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  t|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp  p|pipe")
     flag.StringVar(&outputFormat, "f", "text", "<text|json> output format (default is text)")
+    flag.BoolVar(&skipLostEvents, "L", false, "do not output lost event information")
 
     flag.Parse()
 
@@ -69,6 +71,8 @@ func main() {
         fmt.Fprintf(os.Stderr, "failed to set output format: %s\n", err)
         os.Exit(1)
     }
+
+    events.SetSkipLostIpcEvents(skipLostEvents)
 
     if collectAllTypes {
         collectSignals = true
