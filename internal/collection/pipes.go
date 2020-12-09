@@ -393,7 +393,8 @@ func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
 
 func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
     perfChannel := make(chan []byte, 1024)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", nil)
+    lostChannel := make(chan uint64, 32)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", lostChannel)
     if err != nil {
         return err
     }
@@ -417,6 +418,9 @@ func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
             if err := handlePipeIoEvent(&event, eventBytes); err != nil {
                 return fmt.Errorf("failed to handle pipe io event: %w", err)
             }
+
+        case lost := <-lostChannel:
+            events.EmitLostIpcEvents(events.IPC_EVENT_PIPE, lost)
 
         case <- exit:
             return nil

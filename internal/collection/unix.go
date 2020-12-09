@@ -522,7 +522,8 @@ func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *C
     }
 
     perfChannel := make(chan []byte, 1024)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "unix_events", nil)
+    lostChannel := make(chan uint64, 32)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "unix_events", lostChannel)
     if err != nil {
         return err
     }
@@ -546,6 +547,9 @@ func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *C
             if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
                 return fmt.Errorf("failed to handle unix socket ipc event: %w", err)
             }
+
+        case lost := <-lostChannel:
+            events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
         case <- exit:
             return nil

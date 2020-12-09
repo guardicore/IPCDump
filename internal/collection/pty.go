@@ -190,8 +190,8 @@ func installPtyHooks(bpfMod *bpf.BpfModule) error {
 
 func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
     perfChannel := make(chan []byte, 1024)
-
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", nil)
+    lostChannel := make(chan uint64, 32)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", lostChannel)
     if err != nil {
         return err
     }
@@ -215,6 +215,9 @@ func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommI
             if err := handlePtyWriteEvent(&event, eventBytes, commId); err != nil {
                 return fmt.Errorf("failed to handle pty write event: %w", err)
             }
+
+        case lost := <-lostChannel:
+            events.EmitLostIpcEvents(events.IPC_EVENT_PTY_WRITE, lost)
 
         case <- exit:
             return nil

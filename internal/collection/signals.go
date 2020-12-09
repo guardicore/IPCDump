@@ -105,7 +105,8 @@ func installSignalHooks(bpfMod *bpf.BpfModule) error {
 
 func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
     perfChannel := make(chan []byte, 32)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", nil)
+    lostChannel := make(chan uint64, 8)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", lostChannel)
     if err != nil {
         return err
     }
@@ -127,6 +128,9 @@ func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIde
             if err := handleSignalEvent(&event, commId); err != nil {
                 return fmt.Errorf("failed to handle signal event: %w", err)
             }
+
+        case lost := <-lostChannel:
+            events.EmitLostIpcEvents(events.IPC_EVENT_SIGNAL, lost)
 
         case <- exit:
             return nil

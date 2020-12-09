@@ -21,9 +21,11 @@ const (
 )
 
 type outputFunc func(IpcEvent) error
+type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 
 var outputBytesLimit int = 0
 var emitFunc outputFunc = outputEmittedIpcEventText
+var emitLostFunc outputLostFunc = outputLostIpcEventsText
 
 type jsonIpcEventFormat struct {
     SrcPid int64 `json:"src_pid"`
@@ -36,6 +38,11 @@ type jsonIpcEventFormat struct {
     Bytes []byte `json:"bytes,omitempty"`
 }
 
+type jsonIpcLostEventFormat struct {
+    LostType string `json:"lost_type"`
+    Count uint64 `json:"count"`
+    Timestamp time.Time `json:"time"`
+}
 
 func (m IpcMetadata) MarshalJSON() ([]byte, error) {
     buf := &bytes.Buffer{}
@@ -83,9 +90,13 @@ func pidStr(pid int64) string {
     return strconv.FormatUint((uint64)(pid), 10)
 }
 
-func outputEmittedIpcEventText(e IpcEvent) error {
+func printTimestamp(ts time.Time) {
     fmt.Printf("%02d:%02d:%02d.%.9d ",
-        e.Timestamp.Hour(), e.Timestamp.Minute(), e.Timestamp.Second(), e.Timestamp.Nanosecond())
+        ts.Hour(), ts.Minute(), ts.Second(), ts.Nanosecond())
+}
+
+func outputEmittedIpcEventText(e IpcEvent) error {
+    printTimestamp(e.Timestamp)
     fmt.Printf("%s %s(%s) > %s(%s)", e.Type,
         pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
     if e.Metadata != nil && len(e.Metadata) > 0 {
@@ -103,6 +114,12 @@ func outputEmittedIpcEventText(e IpcEvent) error {
         }
     }
 
+    return nil
+}
+
+func outputLostIpcEventsText(t EmittedEventType, lost uint64, ts time.Time) error {
+    printTimestamp(ts)
+    fmt.Printf("%s: lost %d events\n", t, lost)
     return nil
 }
 
@@ -130,13 +147,29 @@ func outputEmittedIpcEventJson(e IpcEvent) error {
     return nil
 }
 
+func outputLostIpcEventsJson(t EmittedEventType, lost uint64, ts time.Time) error {
+    jsonEvent := jsonIpcLostEventFormat{
+        LostType: string(t),
+        Count: lost,
+        Timestamp: ts,
+    }
+    j, err := json.Marshal(jsonEvent)
+    if err != nil {
+        return err
+    }
+
+    fmt.Println(string(j))
+    return nil
+}
 
 func SetEmitOutputFormat(outputFmt EventOutputFormat) error {
     switch outputFmt {
     case EMIT_FMT_TEXT:
         emitFunc = outputEmittedIpcEventText
+        emitLostFunc = outputLostIpcEventsText
     case EMIT_FMT_JSON:
         emitFunc = outputEmittedIpcEventJson
+        emitLostFunc = outputLostIpcEventsJson
     default:
         return fmt.Errorf("unrecognized output format %d", outputFmt)
     }
@@ -163,5 +196,11 @@ func outputIpcEvent(event IpcEvent) error {
     mu.Lock()
     defer mu.Unlock()
     return emitFunc(event)
+}
+
+func outputLostIpcEvents(eventType EmittedEventType, lost uint64, timestamp time.Time) error {
+    mu.Lock()
+    defer mu.Unlock()
+    return emitLostFunc(eventType, lost, timestamp)
 }
 

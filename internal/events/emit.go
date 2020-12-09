@@ -15,9 +15,11 @@ const (
     IPC_EVENT_SIGNAL = "signal"
     IPC_EVENT_UNIX_SOCK_STREAM = "unix-stream"
     IPC_EVENT_UNIX_SOCK_DGRAM = "unix-dgram"
+    IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM = "unix-stream-or-dgram"  // for lost events
     IPC_EVENT_PTY_WRITE = "pty"
     IPC_EVENT_LOOPBACK_SOCK_TCP = "loopback-tcp"
     IPC_EVENT_LOOPBACK_SOCK_UDP = "loopback-udp"
+    IPC_EVENT_LOOPBACK_TCP_OR_UDP = "loopback-tcp-or-udp"  // for lost events
     IPC_EVENT_PIPE = "pipe"
 )
 
@@ -128,3 +130,8 @@ func EmitIpcEvent(event IpcEvent) error {
 
     return outputIpcEvent(event)
 }
+
+func EmitLostIpcEvents(eventType EmittedEventType, lost uint64) error {
+    return outputLostIpcEvents(eventType, lost, time.Now())
+}
+

@@ -292,7 +292,8 @@ func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *Com
     }
 
     perfChannel := make(chan []byte, 4096)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "loopback_events", nil)
+    lostChannel := make(chan uint64, 32)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "loopback_events", lostChannel)
     if err != nil {
         return err
     }
@@ -316,6 +317,9 @@ func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *Com
             if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
                 return fmt.Errorf("failed to handle loopback sock event: %w", err)
             }
+
+        case lost := <-lostChannel:
+            events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
         case <- exit:
             return nil
