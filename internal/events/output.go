@@ -117,7 +117,7 @@ func outputEmittedIpcEventJson(e IpcEvent) error {
 
     if outputBytesLimit < 0 {
         jsonEvent.Bytes = e.Bytes
-    } else if outputBytesLimit > 0 {
+    } else if outputBytesLimit > 0 && len(jsonEvent.Bytes) > outputBytesLimit {
         jsonEvent.Bytes = e.Bytes[:outputBytesLimit]
     }
 
