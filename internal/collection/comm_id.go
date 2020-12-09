@@ -2,7 +2,6 @@ package collection
 
 import (
     "fmt"
-    "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
     "github.com/guardicode/ipcdump/internal/events"
 )
@@ -94,34 +93,51 @@ func SetupCommCollectionBpf(bpfBuilder *bpf.BpfBuilder) error {
     return nil
 }
 
-func NewCommIdentifier(module *bcc.Module) (*CommIdentifier, error) {
+func installCommIdHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
+
     // we use process_free rather than process_exit because it happens later, and we sometimes
     // miss very quickly spawning-and-dying processes
     tracepoint, err := module.LoadTracepoint("trace_sched_process_free")
     if err != nil {
-        return nil, err
+        return err
     }
     if err = module.AttachTracepoint("sched:sched_process_free", tracepoint); err != nil {
-        return nil, err
+        return err
     }
 
     tracepoint, err = module.LoadTracepoint("trace_task_rename")
     if err != nil {
-        return nil, err
+        return err
     }
     if err = module.AttachTracepoint("task:task_rename", tracepoint); err != nil {
-        return nil, err
+        return err
     }
 
     tracepoint, err = module.LoadTracepoint("trace_task_newtask")
     if err != nil {
-        return nil, err
+        return err
     }
     if err = module.AttachTracepoint("task:task_newtask", tracepoint); err != nil {
-        return nil, err
+        return err
+    }
+
+    return nil
+}
+
+var commIdHooksInstalled = false
+
+func NewCommIdentifier(bpfMod *bpf.BpfModule) (*CommIdentifier, error) {
+    if !commIdHooksInstalled {
+        if err := installCommIdHooks(bpfMod); err != nil {
+            return nil, err
+        }
+        commIdHooksInstalled = true
     }
 
     var c CommIdentifier
+    var err error
     c.pidCommMap, err = ScanProcessComms()
     if err != nil {
         return nil, fmt.Errorf("failed initial scan for process comms: %w", err)

@@ -356,16 +356,9 @@ func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte) error {
     return events.EmitIpcEvent(e)
 }
 
-func CollectPipeIpc(module *bcc.Module, exit <-chan struct{}) error {
-    perfChannel := make(chan []byte, 1024)
-    table := bcc.NewTable(module.TableId("pipe_events"), module)
-    perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
-    if err != nil {
-        return err
-    }
-
-    perfMap.Start()
-    defer perfMap.Stop()
+func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
 
     kprobe, err := module.LoadKprobe("retprobe_pipe_write")
     if err != nil {
@@ -392,6 +385,23 @@ func CollectPipeIpc(module *bcc.Module, exit <-chan struct{}) error {
         return err
     }
     if err = module.AttachKprobe("pipe_read", kprobe, -1); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
+    perfChannel := make(chan []byte, 1024)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", nil)
+    if err != nil {
+        return err
+    }
+
+    perfMap.Start()
+    defer perfMap.Stop()
+
+    if err := installPipeIpcHooks(bpfMod); err != nil {
         return err
     }
 

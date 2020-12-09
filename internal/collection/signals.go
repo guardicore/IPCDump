@@ -87,16 +87,9 @@ func InitSignalCollection(bpfBuilder *bpf.BpfBuilder) error {
     return nil
 }
 
-func CollectSignals(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier) error {
-    perfChannel := make(chan []byte, 32)
-    table := bcc.NewTable(module.TableId("signal_events"), module)
-    perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
-    if err != nil {
-        return err
-    }
-
-    perfMap.Start()
-    defer perfMap.Stop()
+func installSignalHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
 
     tracepoint, err := module.LoadTracepoint("trace_signal_generate")
     if err != nil {
@@ -104,6 +97,23 @@ func CollectSignals(module *bcc.Module, exit <-chan struct{}, commId *CommIdenti
     }
 
     if err = module.AttachTracepoint("signal:signal_generate", tracepoint); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
+    perfChannel := make(chan []byte, 32)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", nil)
+    if err != nil {
+        return err
+    }
+
+    perfMap.Start()
+    defer perfMap.Stop()
+
+    if err := installSignalHooks(bpfMod); err != nil {
         return err
     }
 

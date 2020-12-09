@@ -2,7 +2,6 @@ package collection
 
 import (
     "fmt"
-    "github.com/iovisor/gobpf/bcc"
     "github.com/guardicode/ipcdump/internal/bpf"
 )
 
@@ -72,28 +71,44 @@ func SetupSockIdCollectionBpf(bpfBuilder *bpf.BpfBuilder) error {
     return nil
 }
 
-func NewSocketIdentifier(module *bcc.Module) (*SocketIdentifier, error) {
+func installSockIdHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
+
     kprobe, err := module.LoadKprobe("probe___sock_release")
     if err != nil {
-        return nil, err
+        return err
     }
     if err := module.AttachKprobe("__sock_release", kprobe, -1); err != nil {
-        return nil, err
+        return err
     }
 
     kprobe, err = module.LoadKprobe("retprobe_sockfd_lookupX")
     if err != nil {
-        return nil, err
+        return err
     }
     if err := module.AttachKretprobe("sockfd_lookup", kprobe, -1); err != nil {
-        return nil, err
+        return err
     }
     if err := module.AttachKretprobe("sockfd_lookup_light", kprobe, -1); err != nil {
-        return nil, err
+        return err
     }
 
+    return nil
+}
+
+var sockIdHooksInstalled = false
+
+func NewSocketIdentifier(bpfMod *bpf.BpfModule) (*SocketIdentifier, error) {
+    if !sockIdHooksInstalled {
+        if err := installSockIdHooks(bpfMod); err != nil {
+            return nil, err
+        }
+        sockIdHooksInstalled = true
+    }
 
     var s SocketIdentifier
+    var err error
     s.inodeInfoMap, err = ScanProcessSocketInodes()
     if err != nil {
         return nil, fmt.Errorf("failed initial scan for process socket inodes: %w", err)

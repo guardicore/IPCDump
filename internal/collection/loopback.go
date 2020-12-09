@@ -255,22 +255,9 @@ func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, 
     return events.EmitIpcEvent(e)
 }
 
-func CollectLoopbackIpc(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
-
-    if (collectLoopbackTcp || collectLoopbackUdp) == false {
-        return nil
-    }
-
-    perfChannel := make(chan []byte, 4096)
-    table := bcc.NewTable(module.TableId("loopback_events"), module)
-    perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
-    if err != nil {
-        return err
-    }
-
-    perfMap.Start()
-    defer perfMap.Stop()
+func installLoopbackHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
 
     if collectLoopbackTcp {
         kprobe, err := module.LoadKprobe("probe_tcp_rcv_established")
@@ -290,6 +277,29 @@ func CollectLoopbackIpc(module *bcc.Module, exit <-chan struct{}, commId *CommId
         if err := module.AttachKprobe("udp_queue_rcv_skb", kprobe, -1); err != nil {
             return err
         }
+    }
+
+    return nil
+}
+
+func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
+
+    if (collectLoopbackTcp || collectLoopbackUdp) == false {
+        return nil
+    }
+
+    perfChannel := make(chan []byte, 4096)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "loopback_events", nil)
+    if err != nil {
+        return err
+    }
+
+    perfMap.Start()
+    defer perfMap.Stop()
+
+    if err := installLoopbackHooks(bpfMod); err != nil {
+        return err
     }
 
     for {

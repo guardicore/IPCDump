@@ -448,23 +448,9 @@ func InitUnixSocketIpcCollection(bpfBuilder *bpf.BpfBuilder, streams bool, dgram
     return nil
 }
 
-// in theory we could pass sockId for just the datagram case
-func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
-
-    if (collectUnixStreams || collectUnixDgrams) == false {
-        return nil
-    }
-
-    perfChannel := make(chan []byte, 1024)
-    table := bcc.NewTable(module.TableId("unix_events"), module)
-    perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
-    if err != nil {
-        return err
-    }
-
-    perfMap.Start()
-    defer perfMap.Stop()
+func installUnixSocketHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
 
     if collectUnixStreams {
         kprobe, err := module.LoadKprobe("retprobe_unix_stream_sendmsg");
@@ -499,7 +485,6 @@ func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, commId *Comm
         }
     }
 
-
     if collectUnixDgrams {
         kprobe, err := module.LoadKprobe("retprobe___skb_try_recv_datagram")
         if err != nil {
@@ -522,6 +507,31 @@ func CollectUnixSocketIpc(module *bcc.Module, exit <-chan struct{}, commId *Comm
         if err = module.AttachKprobe("unix_dgram_recvmsg", kprobe, -1); err != nil {
             return err
         }
+    }
+
+
+    return nil
+}
+
+// in theory we could pass sockId for just the datagram case
+func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
+    sockId *SocketIdentifier) error {
+
+    if (collectUnixStreams || collectUnixDgrams) == false {
+        return nil
+    }
+
+    perfChannel := make(chan []byte, 1024)
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "unix_events", nil)
+    if err != nil {
+        return err
+    }
+
+    perfMap.Start()
+    defer perfMap.Stop()
+
+    if err := installUnixSocketHooks(bpfMod); err != nil {
+        return err
     }
 
     for {

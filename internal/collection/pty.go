@@ -165,17 +165,9 @@ func InitPtyWriteCollection(bpfBuilder *bpf.BpfBuilder) error {
     return nil
 }
 
-func CollectPtyWrites(module *bcc.Module, exit <-chan struct{}, commId *CommIdentifier) error {
-    perfChannel := make(chan []byte, 1024)
-
-    table := bcc.NewTable(module.TableId("pty_events"), module)
-    perfMap, err := bcc.InitPerfMap(table, perfChannel, nil)
-    if err != nil {
-        return err
-    }
-
-    perfMap.Start()
-    defer perfMap.Stop()
+func installPtyHooks(bpfMod *bpf.BpfModule) error {
+    module := bpfMod.Get()
+    defer bpfMod.Put()
 
     kprobe, err := module.LoadKprobe("retprobe_pty_write");
     if err != nil {
@@ -190,6 +182,24 @@ func CollectPtyWrites(module *bcc.Module, exit <-chan struct{}, commId *CommIden
         return err
     }
     if err := module.AttachKprobe("pty_write", kprobe, -1); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
+    perfChannel := make(chan []byte, 1024)
+
+    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", nil)
+    if err != nil {
+        return err
+    }
+
+    perfMap.Start()
+    defer perfMap.Stop()
+
+    if err := installPtyHooks(bpfMod); err != nil {
         return err
     }
 

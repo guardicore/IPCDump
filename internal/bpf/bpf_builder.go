@@ -47,7 +47,7 @@ func (b *BpfBuilder) AddSources(src string) {
     b.bpfSources += src + "\n\n"
 }
 
-func (b *BpfBuilder) LoadModule() (*bcc.Module, error) {
+func (b *BpfBuilder) LoadModule() (*BpfModule, error) {
     if b.loaded {
         return nil, errors.New("bpf module has already been loaded")
     }
@@ -66,6 +66,6 @@ func (b *BpfBuilder) LoadModule() (*bcc.Module, error) {
     }
 
     b.loaded = true
-    return m, nil
+    return NewBpfModule(m), nil
 }
 
