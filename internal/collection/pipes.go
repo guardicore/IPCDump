@@ -18,21 +18,11 @@ const pipeIncludes = `
 const pipeSource = `
 BPF_PERF_OUTPUT(pipe_events);
 
-
-// The flow here is a bit convoluted. Here's how it works.
-// There are two situations for data transfer in a pipe: write-within-read and read-within-write.
-// 1) Write-within-read: the pipe is empty. A call to pipe_read() blocks until there's something to read.
-// 2) Read-within-write: the pipe is full. A call to pipe_write() blocks until the reader makes room.
-//
-// In case 1, we set up a new outer_pipe_io_t for the write event (with the writer's process info).
-// Then, when we reach the read event inside the write event, we save all the information we need in a
-// pipe_io_call_t; the event is submitted when the *read* event returns. 
-// (The write event retprobe just does cleanup in this case.)
-//
-// Case 2 is exactly the opposite: a new outer_pipe_io_t is filled out for the initial read (reader's pid
-// info this time). The write event (pipe_write() called before pipe_read() returns) fills out a
-// pipe_io_call_t, and on the retprobe from pipe_write() the new event is submitted. Finally, pipe_read()'s
-// retprobe does some cleanup for the initial outer_pipe_io_t.
+// pipe_write() saves the last pid+comm that wrote to this inode.
+// (probe__destroy_inode() cleans the map up).
+// pipe_read() takes the source pid+comm from that map.
+// this isn't 100% accurate, but there isn't really a good way
+// to keep track of which bytes belong to which process.
 
 struct __attribute__((packed)) pipe_io_metadata_t {
     u64 src_pid;
@@ -45,7 +35,7 @@ struct __attribute__((packed)) pipe_io_metadata_t {
     u64 timestamp;
 };
 
-struct __attribute__((packed)) pipe_io_call_t {
+struct __attribute__((packed)) pipe_read_info_t {
     struct pipe_io_metadata_t d;
     struct iov_iter arg_iov;
 };
@@ -55,18 +45,17 @@ struct pipe_io_data_t {
     REMAINING_BYTES_BUFFER(struct pipe_io_metadata_t);
 };
 
-struct outer_pipe_io_t {
+struct pipe_writer_record_t {
     u64 pid;
     char comm[16];
+    u64 prev_pid;
+    char prev_comm[16];
 };
+BPF_HASH(last_pipe_writers_by_inode, u64, struct pipe_writer_record_t);
+
+BPF_HASH(pipe_reads_by_pid_arr, u64, struct pipe_read_info_t);
 
 BPF_PERCPU_ARRAY(working_pipe_io_arr, struct pipe_io_data_t, 1);
-
-BPF_HASH(running_pipe_reads, u64, struct outer_pipe_io_t);
-BPF_HASH(running_pipe_writes, u64, struct outer_pipe_io_t);
-
-BPF_HASH(pipe_reads_by_pid_arr, u64, struct pipe_io_call_t);
-BPF_HASH(pipe_writes_by_pid_arr, u64, struct pipe_io_call_t);
 
 #ifdef COLLECT_IPC_BYTES
 
@@ -166,15 +155,15 @@ static inline void fill_current_pid_comm(u64 *pid, char *comm, size_t comm_len) 
     bpf_get_current_comm(comm, comm_len);
 }
 
-static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) __attribute__((always_inline));
-static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_io_call_t *call) {
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_read_info_t *read_info) __attribute__((always_inline));
+static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const struct pipe_read_info_t *read_info) {
     int ekey = 0;
     struct pipe_io_data_t *e = working_pipe_io_arr.lookup(&ekey);
     if (e) {
-        if (!bpf_probe_read(&e->d, sizeof(e->d), &call->d)) {
+        if (!bpf_probe_read(&e->d, sizeof(e->d), &read_info->d)) {
 
             #ifdef COLLECT_IPC_BYTES
-            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &call->arg_iov, e->d.count);
+            ssize_t collected = collect_iov_bytes(e->bytes, sizeof(e->bytes), &read_info->arg_iov, e->d.count);
             if (collected >= 0) {
                 e->bytes_len = BYTES_BUF_LEN(e, collected);
             }
@@ -186,51 +175,47 @@ static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const stru
 }
 
 ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *to) {
-    struct pipe_io_call_t call = {0};
-    if (get_kiocb_inode(iocb, &call.d.pipe_inode)) {
+    struct pipe_read_info_t read_info = {0};
+    if (get_kiocb_inode(iocb, &read_info.d.pipe_inode)) {
         bpf_trace_printk("failed to get kiocb inode\n");
         return 0;
     }
 
-    struct outer_pipe_io_t *running_write = running_pipe_writes.lookup(&call.d.pipe_inode);
-    if (running_write) {
-        if (bpf_probe_read(&call.arg_iov, sizeof(call.arg_iov), to)) {
-            bpf_trace_printk("failed to copy iov in probe_pipe_read()\n");
-            return 0;
-        }
-        call.d.src_pid = running_write->pid;
-        if (bpf_probe_read(call.d.src_comm, sizeof(call.d.src_comm), running_write->comm)) {
-            bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", call.d.src_pid);
-        }
-        fill_current_pid_comm(&call.d.dst_pid, call.d.dst_comm, sizeof(call.d.dst_comm));
-        get_kiocb_name(iocb, call.d.pipe_name, sizeof(call.d.pipe_name));
-
-    } else {
-        struct outer_pipe_io_t this_read = {0};
-        fill_current_pid_comm(&this_read.pid, this_read.comm, sizeof(this_read.comm));
-
-        running_pipe_reads.update(&call.d.pipe_inode, &this_read);
+    struct pipe_writer_record_t *last_writer_to_this = last_pipe_writers_by_inode.lookup(&read_info.d.pipe_inode);
+    if (last_writer_to_this == NULL) {
+        bpf_trace_printk("warning: failed to find last writer to pipe %d in probe_pipe_read()\n",
+            read_info.d.pipe_inode);
+        return 0;
     }
+
+    if (bpf_probe_read(&read_info.arg_iov, sizeof(read_info.arg_iov), to)) {
+        bpf_trace_printk("failed to copy iov in probe_pipe_read()\n");
+        return 0;
+    }
+    read_info.d.src_pid = last_writer_to_this->pid;
+    if (bpf_probe_read(read_info.d.src_comm, sizeof(read_info.d.src_comm), last_writer_to_this->comm)) {
+        bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", read_info.d.src_pid);
+    }
+    fill_current_pid_comm(&read_info.d.dst_pid, read_info.d.dst_comm, sizeof(read_info.d.dst_comm));
+    get_kiocb_name(iocb, read_info.d.pipe_name, sizeof(read_info.d.pipe_name));
+
     u64 pkey = bpf_get_current_pid_tgid();
-    pipe_reads_by_pid_arr.update(&pkey, &call);
+    pipe_reads_by_pid_arr.update(&pkey, &read_info);
 
     return 0;
 }
 
 ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
     u64 pkey = bpf_get_current_pid_tgid();
-    struct pipe_io_call_t *read_call = pipe_reads_by_pid_arr.lookup(&pkey);
-    if (!read_call) {
+    struct pipe_read_info_t *read_info = pipe_reads_by_pid_arr.lookup(&pkey);
+    if (!read_info) {
+        bpf_trace_printk("warning: failed to find current read info in retprobe_pipe_read()\n");
         return 0;
     }
 
     u64 ino = 0;
-    if (bpf_probe_read(&ino, sizeof(ino), &read_call->d.pipe_inode)) {
-        return 0;
-    }
-    running_pipe_reads.delete(&ino);
-
-    if (!running_pipe_writes.lookup(&ino)) {
+    if (bpf_probe_read(&ino, sizeof(ino), &read_info->d.pipe_inode)) {
+        bpf_trace_printk("warning: failed to copy current inode in retprobe_pipe_read()\n");
         pipe_reads_by_pid_arr.delete(&pkey);
         return 0;
     }
@@ -241,77 +226,37 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
         return 0;
     }
 
-    read_call->d.count = (u64)res;
-    read_call->d.timestamp = bpf_ktime_get_ns();
+    read_info->d.count = (u64)res;
+    read_info->d.timestamp = bpf_ktime_get_ns();
 
-    fill_and_submit_pipe_io_event(ctx, read_call);
+    fill_and_submit_pipe_io_event(ctx, read_info);
 
     pipe_reads_by_pid_arr.delete(&pkey);
+    return 0;
+}
+
+int probe___destroy_inode(struct inode *inode) {
+    // yes, this is true of anonymous pipes as well
+    if (S_ISFIFO(inode->i_mode)) {
+        u64 ino = inode->i_ino;
+        last_pipe_writers_by_inode.delete(&ino);
+    }
+
     return 0;
 }
 
 ssize_t probe_pipe_write(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *from) {
-    struct pipe_io_call_t call = {0};
-    if (get_kiocb_inode(iocb, &call.d.pipe_inode)) {
-        bpf_trace_printk("failed to get kiocb inode\n");
-        return 0;
-    }
-
-    struct outer_pipe_io_t *running_read = running_pipe_reads.lookup(&call.d.pipe_inode);
-    if (running_read) {
-        if (bpf_probe_read(&call.arg_iov, sizeof(call.arg_iov), from)) {
-            bpf_trace_printk("failed to copy iov in probe_pipe_write()\n");
-            return 0;
-        }
-        call.d.dst_pid = running_read->pid;
-        if (bpf_probe_read(call.d.dst_comm, sizeof(call.d.dst_comm), running_read->comm)) {
-            bpf_trace_printk("warning: failed to copy running read's destination comm for pid %d\n", call.d.dst_pid);
-        }
-        fill_current_pid_comm(&call.d.src_pid, call.d.src_comm, sizeof(call.d.src_comm));
-        get_kiocb_name(iocb, call.d.pipe_name, sizeof(call.d.pipe_name));
-
-    } else {
-        struct outer_pipe_io_t this_write = {0};
-        fill_current_pid_comm(&this_write.pid, this_write.comm, sizeof(this_write.comm));
-
-        running_pipe_writes.update(&call.d.pipe_inode, &this_write);
-    }
     u64 pkey = bpf_get_current_pid_tgid();
-    pipe_writes_by_pid_arr.update(&pkey, &call);
-
-    return 0;
-}
-
-ssize_t retprobe_pipe_write(struct pt_regs *ctx) {
-    u64 pkey = bpf_get_current_pid_tgid();
-    struct pipe_io_call_t *write_call = pipe_writes_by_pid_arr.lookup(&pkey);
-    if (!write_call) {
+    u64 pipe_inode = 0;
+    if (get_kiocb_inode(iocb, &pipe_inode)) {
+        bpf_trace_printk("warning failed to get kiocb inode in probe_pipe_write()\n");
         return 0;
     }
 
-    u64 ino = 0;
-    if (bpf_probe_read(&ino, sizeof(ino), &write_call->d.pipe_inode)) {
-        return 0;
-    }
-    running_pipe_writes.delete(&ino);
+    struct pipe_writer_record_t this_write = {0};
+    fill_current_pid_comm(&this_write.pid, this_write.comm, sizeof(this_write.comm));
+    last_pipe_writers_by_inode.update(&pipe_inode, &this_write);
 
-    if (!running_pipe_reads.lookup(&ino)) {
-        pipe_writes_by_pid_arr.delete(&pkey);
-        return 0;
-    }
-
-    ssize_t res = PT_REGS_RC(ctx);
-    if (res <= 0) {
-        pipe_writes_by_pid_arr.delete(&pkey);
-        return 0;
-    }
-
-    write_call->d.count = (u64)res;
-    write_call->d.timestamp = bpf_ktime_get_ns();
-
-    fill_and_submit_pipe_io_event(ctx, write_call);
-
-    pipe_reads_by_pid_arr.delete(&pkey);
     return 0;
 }
 `
@@ -360,11 +305,11 @@ func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
     module := bpfMod.Get()
     defer bpfMod.Put()
 
-    kprobe, err := module.LoadKprobe("retprobe_pipe_write")
+    kprobe, err := module.LoadKprobe("probe___destroy_inode")
     if err != nil {
         return err
     }
-    if err := module.AttachKretprobe("pipe_write", kprobe, -1); err != nil {
+    if err := module.AttachKprobe("__destroy_inode", kprobe, -1); err != nil {
         return err
     }
 
