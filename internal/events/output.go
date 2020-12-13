@@ -24,8 +24,8 @@ type outputFunc func(IpcEvent) error
 type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 
 var outputBytesLimit int = 0
-var emitFunc outputFunc = outputEmittedIpcEventText
-var emitLostFunc outputLostFunc = outputLostIpcEventsText
+var EmitOutputFunc outputFunc = outputEmittedIpcEventText
+var EmitOutputLostFunc outputLostFunc = outputLostIpcEventsText
 
 type jsonIpcEventFormat struct {
     SrcPid int64 `json:"src_pid"`
@@ -165,11 +165,11 @@ func outputLostIpcEventsJson(t EmittedEventType, lost uint64, ts time.Time) erro
 func SetEmitOutputFormat(outputFmt EventOutputFormat) error {
     switch outputFmt {
     case EMIT_FMT_TEXT:
-        emitFunc = outputEmittedIpcEventText
-        emitLostFunc = outputLostIpcEventsText
+        EmitOutputFunc = outputEmittedIpcEventText
+        EmitOutputLostFunc = outputLostIpcEventsText
     case EMIT_FMT_JSON:
-        emitFunc = outputEmittedIpcEventJson
-        emitLostFunc = outputLostIpcEventsJson
+        EmitOutputFunc = outputEmittedIpcEventJson
+        EmitOutputLostFunc = outputLostIpcEventsJson
     default:
         return fmt.Errorf("unrecognized output format %d", outputFmt)
     }
@@ -195,12 +195,12 @@ var mu sync.Mutex
 func outputIpcEvent(event IpcEvent) error {
     mu.Lock()
     defer mu.Unlock()
-    return emitFunc(event)
+    return EmitOutputFunc(event)
 }
 
 func outputLostIpcEvents(eventType EmittedEventType, lost uint64, timestamp time.Time) error {
     mu.Lock()
     defer mu.Unlock()
-    return emitLostFunc(eventType, lost, timestamp)
+    return EmitOutputLostFunc(eventType, lost, timestamp)
 }
 
