@@ -175,26 +175,15 @@ static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const stru
 }
 
 ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *to) {
+    bpf_trace_printk("gonna pipe_read() %d bytes\n");
     struct pipe_read_info_t read_info = {0};
     if (get_kiocb_inode(iocb, &read_info.d.pipe_inode)) {
         bpf_trace_printk("failed to get kiocb inode\n");
         return 0;
     }
-
-    struct pipe_writer_record_t *last_writer_to_this = last_pipe_writers_by_inode.lookup(&read_info.d.pipe_inode);
-    if (last_writer_to_this == NULL) {
-        bpf_trace_printk("warning: failed to find last writer to pipe %d in probe_pipe_read()\n",
-            read_info.d.pipe_inode);
-        return 0;
-    }
-
     if (bpf_probe_read(&read_info.arg_iov, sizeof(read_info.arg_iov), to)) {
         bpf_trace_printk("failed to copy iov in probe_pipe_read()\n");
         return 0;
-    }
-    read_info.d.src_pid = last_writer_to_this->pid;
-    if (bpf_probe_read(read_info.d.src_comm, sizeof(read_info.d.src_comm), last_writer_to_this->comm)) {
-        bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", read_info.d.src_pid);
     }
     fill_current_pid_comm(&read_info.d.dst_pid, read_info.d.dst_comm, sizeof(read_info.d.dst_comm));
     get_kiocb_name(iocb, read_info.d.pipe_name, sizeof(read_info.d.pipe_name));
@@ -209,7 +198,7 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
     u64 pkey = bpf_get_current_pid_tgid();
     struct pipe_read_info_t *read_info = pipe_reads_by_pid_arr.lookup(&pkey);
     if (!read_info) {
-        bpf_trace_printk("warning: failed to find current read info in retprobe_pipe_read()\n");
+        bpf_trace_printk("warning: failed to find current read for %d info in retprobe_pipe_read()\n", pkey);
         return 0;
     }
 
@@ -224,6 +213,19 @@ ssize_t retprobe_pipe_read(struct pt_regs *ctx) {
     if (res <= 0) {
         pipe_reads_by_pid_arr.delete(&pkey);
         return 0;
+    }
+
+    struct pipe_writer_record_t *last_writer_to_this = last_pipe_writers_by_inode.lookup(&ino);
+    if (last_writer_to_this == NULL) {
+        bpf_trace_printk("warning: failed to find last writer to pipe %d in retprobe_pipe_read()\n",
+            read_info->d.pipe_inode);
+        pipe_reads_by_pid_arr.delete(&pkey);
+        return 0;
+    }
+
+    read_info->d.src_pid = last_writer_to_this->pid;
+    if (bpf_probe_read(read_info->d.src_comm, sizeof(read_info->d.src_comm), last_writer_to_this->comm)) {
+        bpf_trace_printk("warning: failed to copy running write's source comm for pid %d\n", read_info->d.src_pid);
     }
 
     read_info->d.count = (u64)res;
