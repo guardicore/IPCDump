@@ -156,10 +156,10 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
     e->d.dst_port = ntohs(udp_copy.dest);
 
     int64_t count = ntohs(udp_copy.len);
-    if (count <= 0) {
+    if (count <= sizeof(udp_copy)) {
         return 0;
     }
-    e->d.count = count;
+    e->d.count = count - sizeof(udp_copy);
 
     e->d.proto = IPPROTO_UDP;
     e->d.timestamp = bpf_ktime_get_ns();
