@@ -190,17 +190,36 @@ func installSockIdHooks(bpfMod *bpf.BpfModule) error {
         return err
     }
 
+    kprobe, err = module.LoadKprobe("retprobe_inet_csk_accept")
+    if err != nil {
+        return err
+    }
+    if err := module.AttachKretprobe("inet_csk_accept", kprobe, -1); err != nil {
+        return err
+    }
+
+    /*kprobe, err = module.LoadKprobe("retprobe_sk_clone_lock")
+    if err != nil {
+        return err
+    }
+    if err := module.AttachKretprobe("sk_clone_lock", kprobe, -1); err != nil {
+        return err
+    }
+
+    kprobe, err = module.LoadKprobe("probe_sk_clone_lock")
+    if err != nil {
+        return err
+    }
+    if err := module.AttachKprobe("sk_clone_lock", kprobe, -1); err != nil {
+        return err
+    }*/
+
     return nil
 }
 
-var sockIdHooksInstalled = false
-
 func NewSocketIdentifier(bpfMod *bpf.BpfModule) (*SocketIdentifier, error) {
-    if !sockIdHooksInstalled {
-        if err := installSockIdHooks(bpfMod); err != nil {
-            return nil, err
-        }
-        sockIdHooksInstalled = true
+    if err := installSockIdHooks(bpfMod); err != nil {
+        return nil, err
     }
 
     var s SocketIdentifier
