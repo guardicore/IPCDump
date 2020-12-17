@@ -277,6 +277,10 @@ func installLoopbackHooks(bpfMod *bpf.BpfModule) error {
         if err := module.AttachKprobe("udp_queue_rcv_skb", kprobe, -1); err != nil {
             return err
         }
+        // these have separate paths for ipv4/ipv6 in udp, unlike tcp
+        if err := module.AttachKprobe("udpv6_queue_rcv_skb", kprobe, -1); err != nil {
+            return err
+        }
     }
 
     return nil
