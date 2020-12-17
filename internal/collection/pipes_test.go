@@ -1,12 +1,8 @@
 package collection
 
 import (
-    "fmt"
-    "strings"
     "path"
     "os"
-    "bytes"
-    "io/ioutil"
     "testing"
     "time"
     "github.com/guardicode/ipcdump/internal/events"
@@ -20,9 +16,6 @@ var (
     FIFO_STR = []byte("comin_thru_a_fifo")
     FIFO_NAME = "fifo_test"
 )
-
-type TestFunc func(t *testing.T)
-type MatchEventFunc func(e events.IpcEvent) bool
 
 func timeoutTest(t *testing.T, name string, f TestFunc, timeout time.Duration) {
     timeoutChan := time.After(timeout)
@@ -39,34 +32,6 @@ func timeoutTest(t *testing.T, name string, f TestFunc, timeout time.Duration) {
     }
 }
 
-func catchEmitMatch(t *testing.T, name string, f TestFunc, p MatchEventFunc, timeout time.Duration) *events.IpcEvent {
-    prevEmit := events.EmitOutputFunc
-    defer func(){ events.EmitOutputFunc = prevEmit }()
-
-    wasCaught := false
-    caughtEvent := make(chan events.IpcEvent, 1)
-    events.EmitOutputFunc = func(e events.IpcEvent) error {
-        if !wasCaught && p(e) {
-            caughtEvent<- e
-            wasCaught = true
-        }
-        return nil
-    }
-
-    timeoutChan := time.After(timeout)
-    go func() {
-        f(t)
-    }()
-
-    select {
-    case <-timeoutChan:
-        t.Fatal("no event was emitted for " + name)
-        return nil
-    case c := <-caughtEvent:
-        return &c
-    }
-}
-
 func writeBeforeReadTest(t *testing.T) {
     pRead, pWrite := openPipe()
     expected := expectedPipeValues{
@@ -76,7 +41,7 @@ func writeBeforeReadTest(t *testing.T) {
     }
 
     expected.StartTime = time.Now()
-    e := catchEmitMatch(t, "writeBeforeReadTest()", func(*testing.T) {
+    e := captureEmitMatch(t, "writeBeforeReadTest()", func(*testing.T) {
 
         pWrite.Write(WRITE_BEFORE_READ_STR)
         pWrite.Close()
@@ -133,7 +98,7 @@ func fifoTest(t *testing.T) {
     }
 
     expected.StartTime = time.Now()
-    e := catchEmitMatch(t, "fifoTest()",
+    e := captureEmitMatch(t, "fifoTest()",
         func(*testing.T) {
             pWrite.Write(FIFO_STR)
             pWrite.Close()
@@ -167,46 +132,6 @@ func openPipe() (*os.File, *os.File) {
     return readEnd, writeEnd
 }
 
-func myComm() string {
-    b, err := ioutil.ReadFile("/proc/self/comm")
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "warning: failed to read /proc/self/comm: %v", err)
-        return ""
-    }
-
-    return strings.TrimSuffix(nullStr(b), "\n")
-}
-
-func getMetadataValue(t *testing.T, e *events.IpcEvent, name string) interface{} {
-    for _, p := range e.Metadata {
-        if p.Name == name {
-            return p.Value
-        }
-    }
-
-    t.Fatalf("no metadata with name %s was found", name)
-    return nil
-}
-
-func getMetadataOrDefault(e events.IpcEvent, name string, defaultVal interface{}) interface{} {
-    for _, p := range e.Metadata {
-        if p.Name == name {
-            return p.Value
-        }
-    }
-
-    return defaultVal
-}
-
-func getFileInode(f *os.File) uint64 {
-    var s unix.Stat_t
-    if err := unix.Fstat(int(f.Fd()), &s); err != nil {
-        fmt.Fprintf(os.Stderr, "warning: failed to fstat file: %v", err)
-        return 0
-    }
-    return s.Ino
-}
-
 type expectedPipeValues struct {
     Inode uint64
     Name string
@@ -216,49 +141,13 @@ type expectedPipeValues struct {
 }
 
 func checkPipeEvent(t *testing.T, e *events.IpcEvent, expected expectedPipeValues) {
-    if e.Type != events.IPC_EVENT_PIPE {
-        t.Errorf("expected type %v but got %v", events.IPC_EVENT_PIPE, e.Type)
-    }
+    checkType(t, e, events.IPC_EVENT_PIPE)
+    checkOwnIpc(t, e)
+    checkTimestamp(t, e, expected.StartTime, expected.EndTime)
 
-    ownPid := int64(os.Getpid())
-    if e.Src.Pid != ownPid {
-        t.Errorf("unexpected src pid %d (expected %d)", e.Src.Pid, ownPid)
-    }
-    if e.Dst.Pid != ownPid {
-        t.Errorf("unexpected dst pid %d (expected %d)", e.Dst.Pid, ownPid)
-    }
-    ownComm := myComm()
-    if e.Src.Comm != ownComm {
-        t.Errorf("unexpected src comm %s (expected %s)", e.Src.Comm, ownComm)
-    }
-    if e.Dst.Comm != ownComm {
-        t.Errorf("unexpected dst comm %s (expected %s)", e.Dst.Comm, ownComm)
-    }
-
-    if e.Timestamp.Before(expected.StartTime) || e.Timestamp.After(expected.EndTime) {
-        t.Errorf("event timestamp %v was not between start %v and end %v",
-            e.Timestamp, expected.StartTime, expected.EndTime)
-    }
-
-    if bytes.Compare(e.Bytes, expected.Contents) != 0 {
-        t.Errorf("wrong payload: expected\n%v\nbut got\n%v", expected.Contents, e.Bytes)
-    }
-
-    reportedPipeName := getMetadataValue(t, e, "pipe_name").(string)
-    if reportedPipeName != expected.Name {
-        t.Errorf("expected <anonymous> pipe_name but got %s", expected.Name)
-    }
-
-    reportedInode := getMetadataValue(t, e, "pipe_inode").(uint64)
-    if reportedInode != expected.Inode {
-        t.Errorf("expected inode %d but got %d", expected.Inode, reportedInode)
-    }
-
-    reportedCount := getMetadataValue(t, e, "count").(uint64)
-    expectedCount := uint64(len(expected.Contents))
-    if reportedCount != expectedCount {
-        t.Errorf("expected count of %d but got %d", expectedCount, reportedCount)
-    }
+    checkMetadataString(t, e, "pipe_name", expected.Name)
+    checkMetadataUint64(t, e, "pipe_inode", expected.Inode)
+    checkContents(t, e, expected.Contents)
 }
 
 func readBeforeWriteTest(t *testing.T) {
@@ -270,7 +159,7 @@ func readBeforeWriteTest(t *testing.T) {
     }
 
     expected.StartTime = time.Now()
-    e := catchEmitMatch(t, "readBeforeWriteTest()",
+    e := captureEmitMatch(t, "readBeforeWriteTest()",
         func(*testing.T) {
             readComplete := make(chan struct{})
             go func() {
@@ -296,9 +185,7 @@ func readBeforeWriteTest(t *testing.T) {
 }
 
 func TestCollectPipeIpc(t *testing.T) {
-    myPid := []uint64{(uint64)(os.Getpid())}
-    events.FilterBySrcPids(myPid)
-    events.FilterByDstPids(myPid)
+    filterCurrentProcess()
 
     bpfBuilder := bpf.NewBpfBuilder()
     SetupIpcBytesOutput(bpfBuilder, true, 0)
@@ -332,7 +219,6 @@ func TestCollectPipeIpc(t *testing.T) {
         fifoTest(t)
     })
 
-    time.Sleep(1 * time.Second)
     exit <- struct{}{}
 
     timeoutTest(t, "CollectPipeIpc()", func(*testing.T){ <-collectDone }, 1 * time.Second) }
