@@ -114,8 +114,7 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
     e->d.timestamp = bpf_ktime_get_ns();
     bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
-    get_pid_for_sock(&e->d.dst_pid, sk);
-    get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
+    get_pid_comm_for_sock(&e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm), sk);
     e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
     #ifdef COLLECT_IPC_BYTES
@@ -166,8 +165,7 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
     e->d.timestamp = bpf_ktime_get_ns();
     bpf_get_current_comm(e->d.src_comm, sizeof(e->d.src_comm));
 
-    get_pid_for_sock(&e->d.dst_pid, sk);
-    get_comm_for_pid(e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm));
+    get_pid_comm_for_sock(&e->d.dst_pid, e->d.dst_comm, sizeof(e->d.dst_comm), sk);
     e->d.dst_inode = sk->sk_socket->file->f_inode->i_ino;
 
     #ifdef COLLECT_IPC_BYTES

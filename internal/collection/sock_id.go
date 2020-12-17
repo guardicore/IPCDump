@@ -29,27 +29,34 @@ int probe___sock_release(struct pt_regs *ctx,
 }
 
 
-static inline int get_pid_for_socket(u64 *pid, struct socket *sk) __attribute__((always_inline));
-static inline int get_pid_for_socket(u64 *pid, struct socket *sk) {
-    u64 *res = sock_pid_map.lookup(&sk);
+int probe_sk_destruct(struct pt_regs *ctx,
+                      struct sock *sk) {
+    sock_pid_map.delete(&sk);
+    return 0;
+}
+
+static inline int get_pid_comm_for_sock(u64 *pid, char *comm, size_t len, struct sock *sk) __attribute__((always_inline));
+static inline int get_pid_comm_for_sock(u64 *pid, char *comm, size_t len, struct sock *sk) {
+    struct pid_comm_tuple *res = sock_pid_map.lookup(&sk);
     if (!res) {
         *pid = 0;
         return 0;
     }
 
-    *pid = *res;
-    return 1;
+    *pid = res->pid;
+    bpf_probe_read(comm, len, res->comm);
+    return 0;
 }
 
-static inline int get_pid_for_sock(u64 *pid, struct sock *sock) __attribute__((always_inline));
-static inline int get_pid_for_sock(u64 *pid, struct sock *sock) {
-    struct socket *sk_socket = NULL;
-    if (bpf_probe_read(&sk_socket, sizeof(sk_socket), &sock->sk_socket)) {
+static inline int get_pid_comm_for_socket(u64 *pid, char *comm, size_t len, struct socket *sk) __attribute__((always_inline));
+static inline int get_pid_comm_for_socket(u64 *pid, char *comm, size_t len, struct socket *sk) {
+    struct sock *s = NULL;
+    if (bpf_probe_read(&s, sizeof(s), &sk->sk)) {
         *pid = 0;
         return 0;
     }
 
-    return get_pid_for_socket(pid, sk_socket);
+    return get_pid_comm_for_sock(pid, comm, len, s);
 }
 `
 
