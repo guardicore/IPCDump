@@ -10,21 +10,104 @@ var sockIdIncludes = `
 `
 
 var sockIdSource = `
-BPF_HASH(sock_pid_map, struct socket*, u64);
+struct pid_comm_tuple {
+    u64 pid;
+    char comm[16];
+};
+BPF_HASH(sock_pid_map, struct sock*, struct pid_comm_tuple);
+
+static inline void map_sock_to_current(struct sock *sk) __attribute__((always_inline));
+static inline void map_sock_to_current(struct sock *sk) {
+    struct pid_comm_tuple p = {0};
+    p.pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(p.comm, sizeof(p.comm));
+
+    if (p.comm[0] == 'c' && p.comm[1] == 'o') {
+        bpf_trace_printk("mapping socket %llx to current %d %s\n", (unsigned long long)sk, p.pid, p.comm);
+    }
+
+    sock_pid_map.update(&sk, &p);
+}
+
+static inline int clone_sock_tuple(struct sock *new, struct sock *orig) __attribute__((always_inline));
+static inline int clone_sock_tuple(struct sock *new, struct sock *orig) {
+    struct pid_comm_tuple *res = sock_pid_map.lookup(&orig);
+    if (!res) {
+        bpf_trace_printk("warning: failed to find sock pid/comm in clone_sock_tuple()\n");
+        return -1;
+    }
+    struct pid_comm_tuple res_copy = {0};
+    if (bpf_probe_read(&res_copy, sizeof(res_copy), res)) {
+        bpf_trace_printk("warning: failed to find copy pid/comm tuple in clone_sock_tuple()\n");
+        return -1;
+    }
+    sock_pid_map.update(&new, &res_copy);
+    return 0;
+}
+
+static inline void map_socket_to_current(struct socket *sk) __attribute__((always_inline));
+static inline void map_socket_to_current(struct socket *sk) {
+    struct socket copy;
+    if (bpf_probe_read(&copy, sizeof(copy), sk)) {
+        bpf_trace_printk("warning: failed to copy socket in map_sock_to_current()\n");
+        return;
+    }
+
+    if (copy.sk == NULL) {
+        bpf_trace_printk("warning: socket %llx had null sock in map_sock_to_current()\n", (unsigned long long)sk);
+        return;
+    }
+
+    map_sock_to_current(copy.sk);
+}
 
 int retprobe_sockfd_lookupX(struct pt_regs *ctx) {
 
     struct socket *sock = (struct socket*)PT_REGS_RC(ctx);
     if (sock) {
-        u64 pid = bpf_get_current_pid_tgid() >> 32;
-        sock_pid_map.update(&sock, &pid);
+        map_socket_to_current(sock);
     }
     return 0;
 }
 
-int probe___sock_release(struct pt_regs *ctx,
-                       struct socket *sk) {
-    sock_pid_map.delete(&sk);
+int retprobe_inet_csk_accept(struct pt_regs *ctx,
+                             struct sock *sk, 
+                             int flags, 
+                             int *err, 
+                             bool kern) {
+    bpf_trace_printk("GONNA ACCEPT\n");
+    bpf_trace_printk("GONNA ACCEPT KERN %d\n", kern);
+    bpf_trace_printk("GONNA ACCEPT KERN %d AGAIN %llx\n", kern, (unsigned long long)PT_REGS_RC(ctx));
+    bpf_trace_printk("OMG accept: kern %d, ret %llx\n", kern, PT_REGS_RC(ctx));
+    struct sock *newsock = (struct sock*)PT_REGS_RC(ctx);
+    if (!kern && newsock) {
+        map_sock_to_current(newsock);
+    }
+    return 0;
+}
+
+BPF_HASH(sk_clones_by_pid_arr, u64, struct sock*);
+
+int probe_sk_clone_lock(struct pt_regs *ctx,
+                           struct sock *sk,
+                           gfp_t priority) {
+    u64 key = bpf_get_current_pid_tgid();
+    sk_clones_by_pid_arr.update(&key, &sk);
+    return 0;
+}
+
+int retprobe_sk_clone_lock(struct pt_regs *ctx) {
+    u64 key = bpf_get_current_pid_tgid();
+    struct sock **orig = sk_clones_by_pid_arr.lookup(&key);
+    if (!orig) {
+        bpf_trace_printk("warning: failed to get original socket in retprobe_sk_clone_lock()\n");
+        return 0;
+    }
+    struct sock *clone = (struct sock*)PT_REGS_RC(ctx);
+    if (clone != NULL) {
+        clone_sock_tuple(clone, *orig);
+    }
+    sk_clones_by_pid_arr.delete(&key);
     return 0;
 }
 
@@ -40,7 +123,7 @@ static inline int get_pid_comm_for_sock(u64 *pid, char *comm, size_t len, struct
     struct pid_comm_tuple *res = sock_pid_map.lookup(&sk);
     if (!res) {
         *pid = 0;
-        return 0;
+        return -1;
     }
 
     *pid = res->pid;
@@ -53,11 +136,17 @@ static inline int get_pid_comm_for_socket(u64 *pid, char *comm, size_t len, stru
     struct sock *s = NULL;
     if (bpf_probe_read(&s, sizeof(s), &sk->sk)) {
         *pid = 0;
-        return 0;
+        return -1;
+    }
+    
+    if (s == NULL) {
+        *pid = 0;
+        return -1;
     }
 
     return get_pid_comm_for_sock(pid, comm, len, s);
 }
+
 `
 
 type inodeProcessInfo struct {
@@ -82,11 +171,11 @@ func installSockIdHooks(bpfMod *bpf.BpfModule) error {
     module := bpfMod.Get()
     defer bpfMod.Put()
 
-    kprobe, err := module.LoadKprobe("probe___sock_release")
+    kprobe, err := module.LoadKprobe("probe_sk_destruct")
     if err != nil {
         return err
     }
-    if err := module.AttachKprobe("__sock_release", kprobe, -1); err != nil {
+    if err := module.AttachKprobe("sk_destruct", kprobe, -1); err != nil {
         return err
     }
 
