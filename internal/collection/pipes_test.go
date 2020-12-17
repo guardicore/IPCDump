@@ -194,6 +194,7 @@ func TestCollectPipeIpc(t *testing.T) {
     }
 
     mod, err := bpfBuilder.LoadModule()
+    defer mod.Close()
     if err != nil {
         t.Fatalf("LoadModule() failed: %v", err)
     }
