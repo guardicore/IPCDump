@@ -175,7 +175,6 @@ static inline void fill_and_submit_pipe_io_event(struct pt_regs *ctx, const stru
 }
 
 ssize_t probe_pipe_read(struct pt_regs *ctx, struct kiocb *iocb, struct iov_iter *to) {
-    bpf_trace_printk("gonna pipe_read() %d bytes\n");
     struct pipe_read_info_t read_info = {0};
     if (get_kiocb_inode(iocb, &read_info.d.pipe_inode)) {
         bpf_trace_printk("failed to get kiocb inode\n");

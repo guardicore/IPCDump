@@ -130,7 +130,6 @@ int probe_tcp_rcv_established(struct pt_regs *ctx,
 int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
                             struct sock *sk,
                             struct sk_buff *skb) {
-
     int ekey = 0;
     struct loopback_sock_ipc_t *e = working_loopback_event_arr.lookup(&ekey);
     if (!e) {
