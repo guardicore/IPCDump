@@ -22,10 +22,6 @@ static inline void map_sock_to_current(struct sock *sk) {
     p.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(p.comm, sizeof(p.comm));
 
-    if (p.comm[0] == 'c' && p.comm[1] == 'o') {
-        bpf_trace_printk("mapping socket %llx to current %d %s\n", (unsigned long long)sk, p.pid, p.comm);
-    }
-
     sock_pid_map.update(&sk, &p);
 }
 
@@ -198,7 +194,7 @@ func installSockIdHooks(bpfMod *bpf.BpfModule) error {
         return err
     }
 
-    /*kprobe, err = module.LoadKprobe("retprobe_sk_clone_lock")
+    kprobe, err = module.LoadKprobe("retprobe_sk_clone_lock")
     if err != nil {
         return err
     }
@@ -212,7 +208,7 @@ func installSockIdHooks(bpfMod *bpf.BpfModule) error {
     }
     if err := module.AttachKprobe("sk_clone_lock", kprobe, -1); err != nil {
         return err
-    }*/
+    }
 
     return nil
 }
