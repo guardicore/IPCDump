@@ -97,21 +97,31 @@ func getMetadataOrDefault(e events.IpcEvent, name string, defaultVal interface{}
     return defaultVal
 }
 
-func checkOwnIpc(t *testing.T, e *events.IpcEvent) {
+func checkOwnSrcIpc(t *testing.T, e *events.IpcEvent) {
     ownPid := int64(os.Getpid())
     if e.Src.Pid != ownPid {
         t.Errorf("unexpected src pid %d (expected %d)", e.Src.Pid, ownPid)
-    }
-    if e.Dst.Pid != ownPid {
-        t.Errorf("unexpected dst pid %d (expected %d)", e.Dst.Pid, ownPid)
     }
     ownComm := myComm()
     if e.Src.Comm != ownComm {
         t.Errorf("unexpected src comm %s (expected %s)", e.Src.Comm, ownComm)
     }
+}
+
+func checkOwnDstIpc(t *testing.T, e *events.IpcEvent) {
+    ownPid := int64(os.Getpid())
+    if e.Dst.Pid != ownPid {
+        t.Errorf("unexpected dst pid %d (expected %d)", e.Dst.Pid, ownPid)
+    }
+    ownComm := myComm()
     if e.Dst.Comm != ownComm {
         t.Errorf("unexpected dst comm %s (expected %s)", e.Dst.Comm, ownComm)
     }
+}
+
+func checkOwnIpc(t *testing.T, e *events.IpcEvent) {
+    checkOwnSrcIpc(t, e)
+    checkOwnDstIpc(t, e)
 }
 
 func checkType(t *testing.T, e *events.IpcEvent, expected events.EmittedEventType) {
