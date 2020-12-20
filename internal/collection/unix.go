@@ -340,10 +340,10 @@ int retprobe___skb_try_recv_datagram(struct pt_regs *ctx) {
     event_metadata->src_inode = skb->sk->sk_socket->file->f_inode->i_ino;
 
     if (event_metadata->src_pid == 0) {
-        get_pid_for_sock(&event_metadata->src_pid, skb->sk);
-    }
-    if (event_metadata->src_pid != 0) {
-        get_comm_for_pid(event_metadata->src_pid, event_metadata->src_comm, sizeof(event_metadata->src_comm));
+        get_pid_comm_for_sock(&event_metadata->src_pid, 
+            event_metadata->src_comm, 
+            sizeof(event_metadata->src_comm),
+            skb->sk);
     }
 
     event_metadata->count = skb->len;
