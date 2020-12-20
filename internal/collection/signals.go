@@ -10,7 +10,7 @@ import (
     "github.com/guardicode/ipcdump/internal/events"
 )
 
-const signalIncludes = ""
+const signalIncludes = "#include <linux/signal.h>"
 
 const signalSource = `
 BPF_PERF_OUTPUT(signal_events);
@@ -40,8 +40,13 @@ struct __attribute__((packed)) signal_generate_args_t {
     u32 result;
 };
 
+static inline int is_ipc_code(int code) __attribute__((always_inline));
+static inline int is_ipc_code(int code) {
+    return code == SI_USER || code == SI_QUEUE || code == SI_TKILL;
+}
+
 int trace_signal_generate(struct signal_generate_args_t *args) {
-    if (args->result == 0 && args->code == 0) {
+    if (args->result == 0 && is_ipc_code(args->code)) {
         struct signal_data_t signal = {
             .sig = args->sig,
             .dst_pid = args->pid,
