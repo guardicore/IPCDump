@@ -13,6 +13,8 @@ import (
     "github.com/guardicode/ipcdump/internal/bpf"
 )
 
+// TODO: rewrite this with unix.Syscalls. working around net.Conn is a pain
+
 var MESSAGE_CONTENTS = []byte("SEND_ME_OVER_PLEASE! PLEASE PLEASE PLEASE RIGHT NOW WOULD BE GREAT. MESSAGE #")
 
 type expectedLoopbackValues struct {
