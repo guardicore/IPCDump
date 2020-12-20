@@ -221,5 +221,4 @@ func TestCollectPipeIpc(t *testing.T) {
     })
 
     exit <- struct{}{}
-
     timeoutTest(t, "CollectPipeIpc()", func(*testing.T){ <-collectDone }, 1 * time.Second) }

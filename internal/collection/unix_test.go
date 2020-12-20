@@ -187,7 +187,7 @@ func TestCollectUnixSockIpc(t *testing.T) {
         Name string
         Proto int
     }{
-        //{"stream", unix.SOCK_STREAM},
+        {"stream", unix.SOCK_STREAM},
         {"dgram", unix.SOCK_DGRAM},
     }
 
