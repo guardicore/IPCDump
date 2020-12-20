@@ -288,9 +288,10 @@ int retprobe_unix_stream_sendmsg(struct pt_regs *ctx) {
 }
 
 int probe_unix_dgram_recvmsg(struct pt_regs *ctx,
-struct socket *sock,
-struct msghdr *msg,
-size_t len) {
+    struct socket *sock,
+    struct msghdr *msg,
+    size_t len) {
+
     struct unix_sock_ipc_metadata_t *e = new_unix_event(UNIX_IPC_TYPE_DGRAM);
     if (!e) {
         bpf_trace_printk("failed to get new unix ipc event for probe_unix_dgram_recvmsg()\n");
