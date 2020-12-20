@@ -111,7 +111,7 @@ static inline int try_get_unix_name_path(char *path, u32 path_len, const struct 
         // we use addr->len-3 because 2 bytes are for sun_family and 1 more is the initial null
         // (note that the name may contain more null bytes; we choose to stop at the first)
         int64_t read_len = min((int64_t)path_len - 1, (int64_t)name_len - 3);
-        if (read_len < 0 || read_len >= sizeof(name->sun_path) - 1) {
+        if (read_len < 0 || read_len >= sizeof(name->sun_path)) {
             bpf_trace_printk("warning: read_len %lld for unix path was out of bounds\n", read_len);
             return -1;
         }
