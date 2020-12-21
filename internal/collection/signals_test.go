@@ -21,16 +21,16 @@ type siginfo struct {
 }
 
 func checkSignal(t *testing.T, e *events.IpcEvent, p *os.Process, sigNum uint64, sigName string) {
-        checkType(t, e, events.IPC_EVENT_SIGNAL)
-        checkMetadataUint64(t, e, "num", sigNum)
-        checkMetadataString(t, e, "name", sigName)
-        checkOwnSrcIpc(t, e)
-        if e.Dst.Pid != int64(p.Pid) {
-            t.Fatalf("wrong destination pid for signal: expected %d but got %d", p.Pid, e.Dst.Pid)
-        }
-        if e.Dst.Comm != "sleep" {
-            t.Fatalf("wrong destination comm for signal: expected sleep but got %s", e.Dst.Comm)
-        }
+    checkType(t, e, events.IPC_EVENT_SIGNAL)
+    checkMetadataUint64(t, e, "num", sigNum)
+    checkMetadataString(t, e, "name", sigName)
+    checkOwnSrcIpc(t, e)
+    if e.Dst.Pid != int64(p.Pid) {
+        t.Fatalf("wrong destination pid for signal: expected %d but got %d", p.Pid, e.Dst.Pid)
+    }
+    if e.Dst.Comm != "sleep" {
+        t.Fatalf("wrong destination comm for signal: expected sleep but got %s", e.Dst.Comm)
+    }
 }
 
 func TestCollectSignals(t *testing.T) {
@@ -69,12 +69,14 @@ func TestCollectSignals(t *testing.T) {
         }
 
         time.Sleep(500 * time.Millisecond)
-
+        startTime := time.Now()
         e := captureEmit(t, "regularSignalsTest()",
             func(*testing.T) { p.Process.Signal(os.Interrupt) },
             1 * time.Second)
+        endTime := time.Now()
 
         checkSignal(t, e, p.Process, uint64(os.Interrupt.(syscall.Signal)), "interrupt")
+        checkTimestamp(t, e, startTime, endTime)
 
         p.Wait()
     })
@@ -87,6 +89,7 @@ func TestCollectSignals(t *testing.T) {
 
         time.Sleep(500 * time.Millisecond)
 
+        startTime := time.Now()
         e := captureEmit(t, "realtimeSignalsTest()",
             func(*testing.T) {
                 si := siginfo{Signo: -1, Errno: -1}
@@ -101,8 +104,10 @@ func TestCollectSignals(t *testing.T) {
                 }
             },
             1 * time.Second)
+        endTime := time.Now()
         checkType(t, e, events.IPC_EVENT_SIGNAL)
         checkSignal(t, e, p.Process, 34, "signal 34")
+        checkTimestamp(t, e, startTime, endTime)
 
         p.Wait()
     })
