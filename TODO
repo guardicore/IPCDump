@@ -1,0 +1,25 @@
+* general
+** wrap and package project properly (autotools etc)
+** fix go.mods to adhere to best practices
+** check against older and newer Linux versions
+
+* output
+** add pcap format
+
+* ipcplot: add command that turns ipcdump output into a beautiful (interactive? event-correlated?) graph
+
+* testing
+** fix bug where TestCollectPtyWrites() and TestCollectSignals() fail when running all tests (but not one at a time)
+** add tests for non-collection logic
+*** bpfbuilder
+*** bpfmodule
+*** emit
+*** output
+
+* collection
+** replace tracepoint hooks (linux 4.7+) with kprobe (3.1X) for legacy support
+** add new ipc types
+*** seqpacket for network/unix sockets
+*** dbus traffic (separate from unix)
+*** locks (sysv semaphores, futex, others...)
+*** shared memory (mmap, posix shmem, sysv shmem)
