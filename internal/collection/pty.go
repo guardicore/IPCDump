@@ -45,16 +45,21 @@ BPF_HASH(pty_event_by_pid_arr, u64, struct pty_write_data_nobytes_t);
 BPF_PERCPU_ARRAY(working_pty_event_arr, struct pty_write_data_t, 1);
 
 int probe_pty_write(struct pt_regs *ctx, struct tty_struct *tty, const unsigned char *buf, int c) {
-    u64 dst_pid = tty->pgrp->numbers[0].nr;
+    // for consistency, always report from the point of view of the slave.
+    // this is the one that has session info.
+    struct tty_struct *slave = tty;
+    if (slave->driver->subtype == PTY_TYPE_MASTER) {
+        slave = tty->link;
+    }
 
     struct pty_write_data_nobytes_t e = {0};
     e.d.timestamp = bpf_ktime_get_ns();
     e.d.src_pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(e.d.src_comm, sizeof(e.d.src_comm));
-    e.d.dst_pid = tty->pgrp->numbers[0].nr;
+    e.d.dst_pid = slave->pgrp->numbers[0].nr;
     get_comm_for_pid(e.d.dst_pid, e.d.dst_comm, sizeof(e.d.dst_comm));
-    e.d.dst_sid = tty->session->numbers[0].nr;
-    bpf_probe_read_str(e.d.tty_name, sizeof(e.d.tty_name), tty->name);
+    e.d.dst_sid = slave->session->numbers[0].nr;
+    bpf_probe_read_str(e.d.tty_name, sizeof(e.d.tty_name), slave->name);
 
     e.arg_buf = buf;
 
