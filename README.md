@@ -11,6 +11,33 @@ cd ipcdump/cmd/ipcdump
 go build
 ```
 
+## Usage
+```
+./ipcdump -h
+Usage of ./ipcdump:
+  -B uint
+        max number of bytes to dump per event, or 0 for complete event (may be large). meaningful only if -x is specified.
+  -D value
+        filter by destination comm (can be specified more than once)
+  -L    do not output lost event information
+  -P value
+        filter by comm (either source or destination, can be specified more than once)
+  -S value
+        filter by source comm (can be specified more than once)
+  -d value
+        filter by destination pid (can be specified more than once)
+  -f string
+        <text|json> output format (default is text) (default "text")
+  -p value
+        filter by pid (either source or destination, can be specified more than once)
+  -s value
+        filter by source pid (can be specified more than once)
+  -t value
+        filter by type (can be specified more than once).
+        possible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  t|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp  p|pipe
+  -x    dump IPC bytes where relevant (rather than just event details).
+```
+
 ## One-liners
 Run as root:
 ``` 
@@ -29,3 +56,27 @@ Run as root:
 # dump json-formatted pipe i/o metadata and first 64 bytes of contents
 ./ipcdump -t pipe -x -B 64 -f json
 ```
+
+## Features
+- Support for pipes and FIFOs
+- Loopback IPC
+- Signals (regular and realtime)
+- Unix streams and datagrams
+- Pseudoterminal-based IPC
+- Event filtering based on process PID or name
+- Human-friendly or JSON-formatted output
+
+## Design
+ipcdump is built of a series of collectors, each of which is in charge of a particular type of IPC event. For example, `IPC_EVENT_LOOPBACK_SOCK_UDP` or `IPC_EVENT_SIGNAL`.
+
+In practice, all of the collectors are built using bpf hooks attached to kprobes and tracepoints. Their implementations are entirely separate, though -- there's no particular reason to assume our information will always come from bpf. That said, the different collectors do have to share a single bpf module, because there's some common code that they need to share. To this end, we share a single BpfBuilder (which is essentially a wrapper around concatenating strings of bcc code) and each collector registers its own code with that builder. The full bcc script is then loaded with gobpf, and each module places the hooks it needs.
+
+There are currently two kinds of bookkeeping that are shared between IPC collectors:
+- `SocketIdentifier (internal/collection/sock_id.go)` -- maps between kernel `struct sock*` and the processes that use them.
+- `CommIdentifier (internal/collection/comm_id.go)` -- maps between pid numbers and the corresponding process name (`/proc/<pid>/comm`).
+The bookkeeping done in each of these is particularly important for short-lived processes; while this information can be filled out later in usermode by parsing `/proc`, often the relevant process will have disappeared by the time the event hits the handler. That said, we do sometimes fill in information from `/proc`. This happens mostly for processes that existed before ipcdump was run; we won't catch events like process naming in this case. `SocketIdentifier` and `CommIdentifier` sort of try and abstract this duality between bcc code and `/proc` parsing behind a single API, although it's not super-clean. By the way, in super-new versions of Linux (5.8), bpf iterators can entirely replace this bookkeeping, although for backwards compatibility we should probably stick to the hooks-and-procfs paradigm for now.
+
+Event output is done through the common `EmitIpcEvent()` function, which takes a standard event format (source process, dest process, metadata key-value pairs, and contents) and outputs it in a unified format.  To save event bandwidth, collectors typically don't output IPC contents if the `-x` flag isn't specified. This is done with some fancy preprocessing magic in `internal/collection/ipc_bytes.go`.
+
+## Contributing
+Please do! Check out TODO for the really important stuff. Most of the early work on ipcdump will probably involve making adjustments for different kernel versions and symbols.

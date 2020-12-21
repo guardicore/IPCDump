@@ -17,6 +17,7 @@
 *** output
 
 * collection
+** filter by pid/comm in our bpf rather than at later emit stage
 ** replace tracepoint hooks (linux 4.7+) with kprobe (3.1X) for legacy support
 ** add new ipc types
 *** seqpacket for network/unix sockets
