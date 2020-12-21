@@ -42,6 +42,10 @@ var filteredSrcPids = make(map[uint64]struct{})
 var filteredDstPids = make(map[uint64]struct{})
 var filteredAnyPids = make(map[uint64]struct{})
 
+var filteredSrcComms = make(map[string]struct{})
+var filteredDstComms = make(map[string]struct{})
+var filteredAnyComms = make(map[string]struct{})
+
 func isFilteringBySrcPid() bool {
     return len(filteredSrcPids) > 0
 }
@@ -70,6 +74,36 @@ func isAnyPidAllowed(pid int64) bool {
     return ok
 }
 
+
+func isFilteringBySrcComm() bool {
+    return len(filteredSrcComms) > 0
+}
+func isFilteringByDstComm() bool {
+    return len(filteredDstComms) > 0
+}
+func isFilteringByAnyComm() bool {
+    return len(filteredAnyComms) > 0
+}
+func isSrcCommAllowed(comm string) bool {
+    if len(comm) == 0 {
+        return true
+    }
+    _, ok := filteredSrcComms[comm]
+    return ok
+}
+func isDstCommAllowed(comm string) bool {
+    if len(comm) == 0 {
+        return true
+    }
+    _, ok := filteredDstComms[comm]
+    return ok
+}
+func isAnyCommAllowed(comm string) bool {
+    _, ok := filteredAnyComms[comm]
+    return ok
+}
+
+
 func FilterBySrcPids(pids []uint64) {
     for _, pid := range pids {
         filteredSrcPids[pid] = struct{}{}
@@ -89,7 +123,27 @@ func FilterByAnyPids(pids []uint64) {
 
 }
 
-func isPidAllowed(srcPid int64, dstPid int64) bool {
+
+func FilterBySrcComms(comms []string) {
+    for _, comm := range comms {
+        filteredSrcComms[comm] = struct{}{}
+    }
+}
+
+func FilterByDstComms(comms []string) {
+    for _, comm := range comms {
+        filteredDstComms[comm] = struct{}{}
+    }
+}
+
+func FilterByAnyComms(comms []string) {
+    for _, comm := range comms {
+        filteredAnyComms[comm] = struct{}{}
+    }
+}
+
+
+func isPidCommAllowed(srcPid int64, dstPid int64, srcComm string, dstComm string) bool {
     filtering := false
 
     if isFilteringByAnyPid() {
@@ -113,6 +167,27 @@ func isPidAllowed(srcPid int64, dstPid int64) bool {
         }
     }
 
+    if isFilteringByAnyComm() {
+        filtering = true
+        if isAnyCommAllowed(srcComm) || isAnyCommAllowed(dstComm) {
+            return true
+        }
+    }
+
+    if isFilteringByDstComm() {
+        filtering = true
+        if isDstCommAllowed(dstComm) {
+            return true
+        }
+    }
+
+    if isFilteringBySrcComm() {
+        filtering = true
+        if isSrcCommAllowed(srcComm) {
+            return true
+        }
+    }
+
     if !filtering {
         return true
     }
@@ -126,7 +201,7 @@ func SetSkipLostIpcEvents(skip bool) {
 }
 
 func EmitIpcEvent(event IpcEvent) error {
-    if !isPidAllowed(event.Src.Pid, event.Dst.Pid) {
+    if !isPidCommAllowed(event.Src.Pid, event.Dst.Pid, event.Src.Comm, event.Dst.Comm) {
         return nil
     }
 

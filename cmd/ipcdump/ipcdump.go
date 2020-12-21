@@ -15,9 +15,15 @@ import (
 func main() {
     var dumpBytes bool
     var dumpBytesMax uint
+
     var filterBySrcPids uintArrayFlags
     var filterByDstPids uintArrayFlags
     var filterByPids uintArrayFlags
+
+    var filterBySrcComms stringArrayFlags
+    var filterByDstComms stringArrayFlags
+    var filterByComms stringArrayFlags
+
     var filterByTypes stringArrayFlags
     var outputFormat string
     var skipLostEvents bool
@@ -25,8 +31,13 @@ func main() {
     flag.BoolVar(&dumpBytes, "x", false, "dump IPC bytes where relevant (rather than just event details).")
     flag.UintVar(&dumpBytesMax, "B", 0, "max number of bytes to dump per event, or 0 for complete event (may be large). meaningful only if -x is specified.")
     flag.Var(&filterBySrcPids, "s", "filter by source pid (can be specified more than once)")
-    flag.Var(&filterByDstPids, "d", "filter by dest pid (can be specified more than once)")
-    flag.Var(&filterByPids, "p", "filter by pid (either source or dest, can be specified more than once)")
+    flag.Var(&filterByDstPids, "d", "filter by destination pid (can be specified more than once)")
+    flag.Var(&filterByPids, "p", "filter by pid (either source or destination, can be specified more than once)")
+
+    flag.Var(&filterBySrcComms, "S", "filter by source comm (can be specified more than once)")
+    flag.Var(&filterByDstComms, "D", "filter by destination comm (can be specified more than once)")
+    flag.Var(&filterByComms, "P", "filter by comm (either source or destination, can be specified more than once)")
+
     flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  t|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp  p|pipe")
     flag.StringVar(&outputFormat, "f", "text", "<text|json> output format (default is text)")
     flag.BoolVar(&skipLostEvents, "L", false, "do not output lost event information")
@@ -56,6 +67,10 @@ func main() {
     events.FilterBySrcPids(filterBySrcPids)
     events.FilterByDstPids(filterByDstPids)
     events.FilterByAnyPids(filterByPids)
+
+    events.FilterBySrcComms(filterBySrcComms)
+    events.FilterByDstComms(filterByDstComms)
+    events.FilterByAnyComms(filterByComms)
 
     var outputFmt events.EventOutputFormat
     switch outputFormat {
