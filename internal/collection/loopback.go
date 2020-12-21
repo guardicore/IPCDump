@@ -11,6 +11,17 @@ import (
     "github.com/guardicode/ipcdump/internal/events"
 )
 
+// We need a common code point that gives us access to both the source and the destination of each
+// loopback packet. Unfortunately, loopback traffic goes through pretty much the same network stack
+// that any other traffic goes through, so a packet doesn't store sending process context along
+// with it.
+// How do we get around this? We rely on the fact that when you send a tcp or udp packet over the
+// loopback, the receiving code is executed in the *sender's* context. So when we call
+// bpf_get_current_pid_tgid() or bpf_get_current_comm() in probe_tcp_rcv_established() and in
+// probe_udp_queue_rcv_skb(), we get the *source* process's information, but the struct sock*
+// we're holding is the one being used by the *receiver*. Feeding this socket into sock_id.go's
+// bookkeeping gets us the destination process's info from that socket.
+
 const loopbackIncludes = `
 #include <net/sock.h>
 #include <linux/skbuff.h>

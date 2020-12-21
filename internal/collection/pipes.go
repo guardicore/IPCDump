@@ -10,6 +10,16 @@ import (
     "github.com/guardicode/ipcdump/internal/events"
 )
 
+// probe_pipe_write() saves the last pid/comm that wrote to the pipe's inode.
+// This mapping is cleaned up in probe__destroy_inode().
+// probe_pipe_read() takes the last pid/comm couple stored in probe_pipe_write() in order to
+// identify the source process.
+// This isn't 100% accurate, but there isn't really a good way to keep track of which bytes
+// were sent by which process, so it's a decent ballpark.
+// Also worth noting: trying to copy bytes out of struct iovec without bounded loop support
+// (only in newish kernels) is a pain, so we report just the first entry. This means we might be
+// missing some bytes.
+
 const pipeIncludes = `
 #include <linux/uio.h>
 #include <linux/fs.h>
@@ -17,12 +27,6 @@ const pipeIncludes = `
 
 const pipeSource = `
 BPF_PERF_OUTPUT(pipe_events);
-
-// pipe_write() saves the last pid+comm that wrote to this inode.
-// (probe__destroy_inode() cleans the map up).
-// pipe_read() takes the source pid+comm from that map.
-// this isn't 100% accurate, but there isn't really a good way
-// to keep track of which bytes belong to which process.
 
 struct __attribute__((packed)) pipe_io_metadata_t {
     u64 src_pid;

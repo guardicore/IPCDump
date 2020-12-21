@@ -10,6 +10,20 @@ import (
     "github.com/guardicode/ipcdump/internal/events"
 )
 
+// These hooks aren't particularly complicated, but there's a lot of boilerplate to them.
+// (Particularly to extracting the unix socket path from the sockets.)
+// Datagram sockets don't store a connection state, so we can't always figure out who 
+// the sender is directly; we fill that in based on the source inode where necessary.
+// The other issue that complicates these hooks is that unix_stream_sendmsg() and
+// unix_dgram_recvmsg() use struct iov_iter rather than simple pointer-length buffers.
+// Copying bytes out of these structs without bounded loop support is very frustrating
+// (we have the same issue with pipe i/o). Fortunately, both unix_stream_sendmsg() and
+// unix_dgram_recvmsg() internally handle one buffer from the iovec at a time using a
+// helper function: skb_copy_datagram_from_iter() in streams and __skb_try_recv_datagram()
+// in datagrams. So we store the metadata we need on entry to unix_stream_sendmsg() and to
+// unix_dgram_recvmsg(), and then report a new event *for each* single buffer transfered in
+// these helper functions.
+
 const unixIncludes = `
 #include <linux/sched.h>
 #include <linux/fs.h>

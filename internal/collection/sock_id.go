@@ -5,6 +5,11 @@ import (
     "github.com/guardicode/ipcdump/internal/bpf"
 )
 
+// Lots of hooks here, but they all do pretty much the same thing: any time someone creates a new
+// struct sock*, or manipulates an existing one, we mark them as the last user of that socket and
+// store their pid/comm for whoever needs them later.
+// The cleanup is done in probe_sk_destruct().
+
 var sockIdIncludes = `
 #include <linux/net.h>
 `
@@ -71,10 +76,6 @@ int retprobe_inet_csk_accept(struct pt_regs *ctx,
                              int flags, 
                              int *err, 
                              bool kern) {
-    bpf_trace_printk("GONNA ACCEPT\n");
-    bpf_trace_printk("GONNA ACCEPT KERN %d\n", kern);
-    bpf_trace_printk("GONNA ACCEPT KERN %d AGAIN %llx\n", kern, (unsigned long long)PT_REGS_RC(ctx));
-    bpf_trace_printk("OMG accept: kern %d, ret %llx\n", kern, PT_REGS_RC(ctx));
     struct sock *newsock = (struct sock*)PT_REGS_RC(ctx);
     if (!kern && newsock) {
         map_sock_to_current(newsock);
