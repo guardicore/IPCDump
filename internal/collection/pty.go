@@ -12,7 +12,6 @@ import (
 )
 
 const ptyWriteIncludes = `
-#include <uapi/linux/ptrace.h>
 #include <linux/tty.h>
 `
 

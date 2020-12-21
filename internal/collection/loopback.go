@@ -14,7 +14,6 @@ import (
 const loopbackIncludes = `
 #include <net/sock.h>
 #include <linux/skbuff.h>
-#include <uapi/linux/ptrace.h>
 #include <linux/net.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
