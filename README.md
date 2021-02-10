@@ -1,10 +1,33 @@
 # ipcdump
+
+[Announcement post](https://www.guardicore.com/labs/ipcdump-guardicores-new-open-source-tool-for-linux-ipc-inspection/)
+
 ipcdump is a tool for tracing interprocess communication (IPC) on Linux. It covers most of the common IPC mechanisms -- pipes, fifos, signals, unix sockets, loopback-based networking, and pseudoterminals. It's a useful tool for debugging multi-process applications, and it's also a simple way to understand how the different moving parts in your system communicate with one another. ipcdump can trace both the metadata and the contents of this communication, and it's particularly well-suited to tracing IPC between short-lived processes, which can be difficult using traditional debugging tools, like strace or gdb. It also has some basic filtering capabilities to help you sift through large quantities of events.
 Most of the information ipcdump collects comes from BPF hooks placed on kprobes and tracepoints at key functions in the kernel, although it also fills in some bookkeeping from the /proc filesystem. To this end ipcdump makes heavy use of [gobpf](https://github.com/iovisor/gobpf), which provides golang binding for the [bcc framework](https://github.com/iovisor/bcc).
 
-Tested on Ubuntu 18.04 LTS running Linux 4.15.0.
+# Requirements & Usage
 
+* golang >= 1.15.6
+### Tested operating systems and kernels
+|          |  Ubuntu 18.04 LTS  |  Ubuntu 20.04 LTS  |
+|:--------:|:------------------:|:------------------:|
+|  4.15.0  |       Tested       |     Not Tested     |
+|  5.4.0   |     Not Tested     |       Tested       |
+|  5.8.0   |     Not Tested     |       Tested*      |
+
+*Requires building bcc from source
 ## Building
+### Dependencies
+1. Install golang
+```
+snap install go --classic
+```
+or
+directly from [golang website](https://golang.org/dl/)
+
+2. Install BCC using iovisor's [instructions](https://github.com/iovisor/bcc/blob/master/INSTALL.md) depending on the operation system you chose (usually the newer versions will require building from source)
+
+### Building ipcdump
 ```
 git clone https://github.com/guardicode/ipcdump
 cd ipcdump/cmd/ipcdump
@@ -40,9 +63,9 @@ Usage of ./ipcdump:
 
 ## One-liners
 Run as root:
-``` 
+```
 # dump all ipc on the system
-./ipcdump 
+./ipcdump
 
 # dump signals sent between any two processes
 ./ipcdump -t kill
