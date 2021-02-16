@@ -29,7 +29,7 @@ directly from [golang website](https://golang.org/dl/)
 
 ### Building ipcdump
 ```
-git clone https://github.com/guardicode/ipcdump
+git clone https://github.com/guardicore/ipcdump
 cd ipcdump/cmd/ipcdump
 go build
 ```
