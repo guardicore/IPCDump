@@ -29,8 +29,8 @@ directly from [golang website](https://golang.org/dl/)
 
 ### Building ipcdump
 ```
-git clone https://github.com/guardicore/ipcdump
-cd ipcdump/cmd/ipcdump
+git clone https://github.com/guardicore/IPCDump
+cd IPCDump/cmd/ipcdump
 go build
 ```
 
