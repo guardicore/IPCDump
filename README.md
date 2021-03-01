@@ -47,6 +47,8 @@ Usage of ./ipcdump:
         filter by comm (either source or destination, can be specified more than once)
   -S value
         filter by source comm (can be specified more than once)
+  -c uint
+        exit after <count> events
   -d value
         filter by destination pid (can be specified more than once)
   -f string

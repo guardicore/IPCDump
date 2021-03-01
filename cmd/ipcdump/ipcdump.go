@@ -15,6 +15,7 @@ import (
 func main() {
     var dumpBytes bool
     var dumpBytesMax uint
+    var eventCountLimit uint
 
     var filterBySrcPids uintArrayFlags
     var filterByDstPids uintArrayFlags
@@ -30,6 +31,7 @@ func main() {
 
     flag.BoolVar(&dumpBytes, "x", false, "dump IPC bytes where relevant (rather than just event details).")
     flag.UintVar(&dumpBytesMax, "B", 0, "max number of bytes to dump per event, or 0 for complete event (may be large). meaningful only if -x is specified.")
+    flag.UintVar(&eventCountLimit, "c", 0, "exit after <count> events")
     flag.Var(&filterBySrcPids, "s", "filter by source pid (can be specified more than once)")
     flag.Var(&filterByDstPids, "d", "filter by destination pid (can be specified more than once)")
     flag.Var(&filterByPids, "p", "filter by pid (either source or destination, can be specified more than once)")
@@ -62,6 +64,10 @@ func main() {
     if !dumpBytes && dumpBytesMax != 0 {
         fmt.Fprintf(os.Stderr, "cannot set output bytes limit if -x is not specified\n")
         os.Exit(1)
+    }
+    
+    if eventCountLimit != 0 {
+        events.SetEmitEventCountLimit(eventCountLimit)
     }
 
     events.FilterBySrcPids(filterBySrcPids)
