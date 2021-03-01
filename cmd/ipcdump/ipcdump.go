@@ -41,7 +41,7 @@ func main() {
     flag.Var(&filterByComms, "P", "filter by comm (either source or destination, can be specified more than once)")
 
     flag.Var(&filterByTypes, "t", "filter by type (can be specified more than once).\npossible values: a|all  k|signal  u|unix  ud|unix-dgram  us|unix-stream  t|pty  lo|loopback  lt|loopback-tcp  lu|loopback-udp  p|pipe")
-    flag.StringVar(&outputFormat, "f", "text", "<text|json> output format (default is text)")
+	flag.StringVar(&outputFormat, "f", "text", "<text|json|csv> output format (default is text)")
     flag.BoolVar(&skipLostEvents, "L", false, "do not output lost event information")
 
     flag.Parse()
@@ -84,6 +84,8 @@ func main() {
         outputFmt = events.EMIT_FMT_TEXT
     case "json":
         outputFmt = events.EMIT_FMT_JSON
+	case "csv":
+		outputFmt = events.EMIT_FMT_CSV
     default:
         fmt.Fprintf(os.Stderr, "unrecognized output format \"%s\"\n", outputFormat)
         os.Exit(1)

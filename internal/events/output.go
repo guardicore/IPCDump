@@ -18,12 +18,15 @@ type EventOutputFormat uint
 const (
     EMIT_FMT_TEXT = iota
     EMIT_FMT_JSON
+	EMIT_FMT_CSV
     EMIT_FMT_END
 )
 
 type outputFunc func(IpcEvent) error
 type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 
+var CSVHeader string = "timestamp,type,src_pid,src_comm,dst_pid,dst_comm\n"
+var printCSVHeader = false
 var outputBytesLimit int = 0
 var limitEventCount bool = false
 var eventCountLimit uint = 0
@@ -168,6 +171,26 @@ func outputLostIpcEventsJson(t EmittedEventType, lost uint64, ts time.Time) erro
     return nil
 }
 
+func outputEmittedIpcEventCsv(e IpcEvent) error {
+	if printCSVHeader {
+		fmt.Print(CSVHeader)
+		printCSVHeader = false
+	}
+
+	fmt.Printf("%s,%s,%s,%s,%s,%s\n", formatTimestamp(e.Timestamp), e.Type,
+		pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
+	return nil
+}
+
+func outputLostIpcEventsCsv(t EmittedEventType, lost uint64, ts time.Time) error {
+	if printCSVHeader {
+		fmt.Print(CSVHeader)
+		printCSVHeader = false
+	}
+	fmt.Printf("%s,%s,-,-,-,-\n", formatTimestamp(ts), t)
+	return nil
+}
+
 func SetEmitOutputFormat(outputFmt EventOutputFormat) error {
     switch outputFmt {
     case EMIT_FMT_TEXT:
@@ -176,6 +199,10 @@ func SetEmitOutputFormat(outputFmt EventOutputFormat) error {
     case EMIT_FMT_JSON:
         EmitOutputFunc = outputEmittedIpcEventJson
         EmitOutputLostFunc = outputLostIpcEventsJson
+	case EMIT_FMT_CSV:
+		printCSVHeader = true
+		EmitOutputFunc = outputEmittedIpcEventCsv
+		EmitOutputLostFunc = outputLostIpcEventsCsv
     default:
         return fmt.Errorf("unrecognized output format %d", outputFmt)
     }
