@@ -93,14 +93,17 @@ func pidStr(pid int64) string {
     return strconv.FormatUint((uint64)(pid), 10)
 }
 
+func formatTimestamp(ts time.Time) string {
+	return fmt.Sprintf("%02d:%02d:%02d.%.9d", ts.Hour(), ts.Minute(), ts.Second(), ts.Nanosecond())
+}
+
 func printTimestamp(ts time.Time) {
-    fmt.Printf("%02d:%02d:%02d.%.9d ",
-        ts.Hour(), ts.Minute(), ts.Second(), ts.Nanosecond())
+	fmt.Printf(formatTimestamp(ts))
 }
 
 func outputEmittedIpcEventText(e IpcEvent) error {
     printTimestamp(e.Timestamp)
-    fmt.Printf("%s %s(%s) > %s(%s)", e.Type,
+	fmt.Printf(" %s %s(%s) > %s(%s)", e.Type,
         pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
     if e.Metadata != nil && len(e.Metadata) > 0 {
         fmt.Printf(": %s %v", e.Metadata[0].Name, e.Metadata[0].Value)
@@ -122,7 +125,7 @@ func outputEmittedIpcEventText(e IpcEvent) error {
 
 func outputLostIpcEventsText(t EmittedEventType, lost uint64, ts time.Time) error {
     printTimestamp(ts)
-    fmt.Printf("%s: lost %d events\n", t, lost)
+	fmt.Printf(" %s: lost %d events\n", t, lost)
     return nil
 }
 
