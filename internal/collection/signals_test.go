@@ -1,117 +1,118 @@
 package collection
 
 import (
-    "os"
-    "os/exec"
-    "syscall"
-    "unsafe"
-    "testing"
-    "time"
-    "golang.org/x/sys/unix"
-    "github.com/guardicode/ipcdump/internal/events"
-    "github.com/guardicode/ipcdump/internal/bpf"
+	"os"
+	"os/exec"
+	"syscall"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"golang.org/x/sys/unix"
 )
 
 // stolen from runtime/defs_linux_386.go
 type siginfo struct {
-	Signo int
-	Errno int
-	Pid  int
-    OtherStuff [1024]byte
+	Signo      int
+	Errno      int
+	Pid        int
+	OtherStuff [1024]byte
 }
 
 func checkSignal(t *testing.T, e *events.IpcEvent, p *os.Process, sigNum uint64, sigName string) {
-    checkType(t, e, events.IPC_EVENT_SIGNAL)
-    checkMetadataUint64(t, e, "num", sigNum)
-    checkMetadataString(t, e, "name", sigName)
-    checkOwnSrcIpc(t, e)
-    if e.Dst.Pid != int64(p.Pid) {
-        t.Fatalf("wrong destination pid for signal: expected %d but got %d", p.Pid, e.Dst.Pid)
-    }
-    if e.Dst.Comm != "sleep" {
-        t.Fatalf("wrong destination comm for signal: expected sleep but got %s", e.Dst.Comm)
-    }
+	checkType(t, e, events.IPC_EVENT_SIGNAL)
+	checkMetadataUint64(t, e, "num", sigNum)
+	checkMetadataString(t, e, "name", sigName)
+	checkOwnSrcIpc(t, e)
+	if e.Dst.Pid != int64(p.Pid) {
+		t.Fatalf("wrong destination pid for signal: expected %d but got %d", p.Pid, e.Dst.Pid)
+	}
+	if e.Dst.Comm != "sleep" {
+		t.Fatalf("wrong destination comm for signal: expected sleep but got %s", e.Dst.Comm)
+	}
 }
 
 func TestCollectSignals(t *testing.T) {
-    bpfBuilder := bpf.NewBpfBuilder()
-    SetupCommCollectionBpf(bpfBuilder)
-    if err := InitSignalCollection(bpfBuilder); err != nil {
-        t.Fatalf("InitSignalCollection() failed: %v", err)
-    }
+	bpfBuilder := bpf.NewBpfBuilder()
+	SetupCommCollectionBpf(bpfBuilder)
+	if err := InitSignalCollection(bpfBuilder); err != nil {
+		t.Fatalf("InitSignalCollection() failed: %v", err)
+	}
 
-    mod, err := bpfBuilder.LoadModule()
-    defer mod.Close()
-    if err != nil {
-        t.Fatalf("LoadModule() failed: %v", err)
-    }
+	mod, err := bpfBuilder.LoadModule()
+	defer mod.Close()
+	if err != nil {
+		t.Fatalf("LoadModule() failed: %v", err)
+	}
 
-    commId, err := NewCommIdentifier(mod)
-    if err != nil {
-        t.Fatalf("NewCommIdentifier() failed: %v", err)
-    }
+	commId, err := NewCommIdentifier(mod)
+	if err != nil {
+		t.Fatalf("NewCommIdentifier() failed: %v", err)
+	}
 
-    exit := make(chan struct{})
-    collectDone := make(chan struct{})
-    go func() {
-        if err := CollectSignals(mod, exit, commId); err != nil {
-            t.Errorf("CollectPipeIpc() failed: %v", err)
-        }
-        collectDone <- struct{}{}
-    }()
+	exit := make(chan struct{})
+	collectDone := make(chan struct{})
+	go func() {
+		if err := CollectSignals(mod, exit, commId); err != nil {
+			t.Errorf("CollectPipeIpc() failed: %v", err)
+		}
+		collectDone <- struct{}{}
+	}()
 
-    time.Sleep(1 * time.Second)
+	time.Sleep(1 * time.Second)
 
-    t.Run("regularSignalsTest", func(t *testing.T) {
-        p := exec.Command("sleep", "3")
-        if err := p.Start(); err != nil {
-            t.Fatalf("failed to start sleep for signal test: %v", err)
-        }
+	t.Run("regularSignalsTest", func(t *testing.T) {
+		p := exec.Command("sleep", "3")
+		if err := p.Start(); err != nil {
+			t.Fatalf("failed to start sleep for signal test: %v", err)
+		}
 
-        time.Sleep(500 * time.Millisecond)
-        startTime := time.Now()
-        e := captureEmit(t, "regularSignalsTest()",
-            func(*testing.T) { p.Process.Signal(os.Interrupt) },
-            1 * time.Second)
-        endTime := time.Now()
+		time.Sleep(500 * time.Millisecond)
+		startTime := time.Now()
+		e := captureEmit(t, "regularSignalsTest()",
+			func(*testing.T) { p.Process.Signal(os.Interrupt) },
+			1*time.Second)
+		endTime := time.Now()
 
-        checkSignal(t, e, p.Process, uint64(os.Interrupt.(syscall.Signal)), "interrupt")
-        checkTimestamp(t, e, startTime, endTime)
+		checkSignal(t, e, p.Process, uint64(os.Interrupt.(syscall.Signal)), "interrupt")
+		checkTimestamp(t, e, startTime, endTime)
 
-        p.Wait()
-    })
+		p.Wait()
+	})
 
-    t.Run("realtimeSignalsTest", func(t *testing.T) {
-        p := exec.Command("sleep", "3")
-        if err := p.Start(); err != nil {
-            t.Fatalf("failed to start sleep for signal test: %v", err)
-        }
+	t.Run("realtimeSignalsTest", func(t *testing.T) {
+		p := exec.Command("sleep", "3")
+		if err := p.Start(); err != nil {
+			t.Fatalf("failed to start sleep for signal test: %v", err)
+		}
 
-        time.Sleep(500 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
-        startTime := time.Now()
-        e := captureEmit(t, "realtimeSignalsTest()",
-            func(*testing.T) {
-                si := siginfo{Signo: -1, Errno: -1}
-                si.Pid = os.Getpid()
-                _, _, errno := unix.Syscall(
-                    unix.SYS_RT_SIGQUEUEINFO,
-                    uintptr(p.Process.Pid),
-                    34,
-                    uintptr(unsafe.Pointer(&si)))
-                if errno != 0 {
-                    t.Fatalf("failed to send realtime signal: %v", errno)
-                }
-            },
-            1 * time.Second)
-        endTime := time.Now()
-        checkType(t, e, events.IPC_EVENT_SIGNAL)
-        checkSignal(t, e, p.Process, 34, "signal 34")
-        checkTimestamp(t, e, startTime, endTime)
+		startTime := time.Now()
+		e := captureEmit(t, "realtimeSignalsTest()",
+			func(*testing.T) {
+				si := siginfo{Signo: -1, Errno: -1}
+				si.Pid = os.Getpid()
+				_, _, errno := unix.Syscall(
+					unix.SYS_RT_SIGQUEUEINFO,
+					uintptr(p.Process.Pid),
+					34,
+					uintptr(unsafe.Pointer(&si)))
+				if errno != 0 {
+					t.Fatalf("failed to send realtime signal: %v", errno)
+				}
+			},
+			1*time.Second)
+		endTime := time.Now()
+		checkType(t, e, events.IPC_EVENT_SIGNAL)
+		checkSignal(t, e, p.Process, 34, "signal 34")
+		checkTimestamp(t, e, startTime, endTime)
 
-        p.Wait()
-    })
+		p.Wait()
+	})
 
-    exit <- struct{}{}
-    timeoutTest(t, "CollectSignals()", func(*testing.T){ <-collectDone }, 1 * time.Second)
+	exit <- struct{}{}
+	timeoutTest(t, "CollectSignals()", func(*testing.T) { <-collectDone }, 1*time.Second)
 }

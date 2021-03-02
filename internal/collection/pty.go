@@ -1,14 +1,15 @@
 package collection
 
 import (
-    "fmt"
-    "unsafe"
-    "bytes"
-    "encoding/binary"
-    "github.com/iovisor/gobpf/bcc"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/mitchellh/go-ps"
-    "github.com/guardicode/ipcdump/internal/events"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"unsafe"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/iovisor/gobpf/bcc"
+	"github.com/mitchellh/go-ps"
 )
 
 const ptyWriteIncludes = `
@@ -105,15 +106,15 @@ int retprobe_pty_write(struct pt_regs *ctx) {
 `
 
 type ptyWriteEvent struct {
-    SrcPid uint64
-    SrcComm [16]byte
-    DstPid uint64
-    DstComm [16]byte
-    DstSid uint64
-    TtyName [64]byte
-    Timestamp uint64
-    Count uint64
-    BytesLen uint16
+	SrcPid    uint64
+	SrcComm   [16]byte
+	DstPid    uint64
+	DstComm   [16]byte
+	DstSid    uint64
+	TtyName   [64]byte
+	Timestamp uint64
+	Count     uint64
+	BytesLen  uint16
 }
 
 // TODO: revisit this list. the issue is that our terminal output recursively triggers this event,
@@ -122,109 +123,108 @@ type ptyWriteEvent struct {
 var spamComms = []string{"tmux: client"}
 
 func shouldSkipEvent(event *ptyWriteEvent) bool {
-    if (event.SrcPid == event.DstPid) {
-        return true
-    }
+	if event.SrcPid == event.DstPid {
+		return true
+	}
 
-    dstProcess, err := ps.FindProcess((int)(event.DstPid))
-    if err == nil && dstProcess != nil {
-        comm := dstProcess.Executable()
-        for _, spamComm := range spamComms {
-            if comm == spamComm {
-                return true
-            }
-        }
-    }
+	dstProcess, err := ps.FindProcess((int)(event.DstPid))
+	if err == nil && dstProcess != nil {
+		comm := dstProcess.Executable()
+		for _, spamComm := range spamComms {
+			if comm == spamComm {
+				return true
+			}
+		}
+	}
 
-    return false
+	return false
 }
 
 func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommIdentifier) error {
-    if shouldSkipEvent(event) {
-        return nil
-    }
+	if shouldSkipEvent(event) {
+		return nil
+	}
 
-    ttyName := nullStr(event.TtyName[:])
-    e := events.IpcEvent{
-        Src: makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
-        Dst: makeIpcEndpoint(commId, event.DstPid, event.DstComm),
-        Type: events.IPC_EVENT_PTY_WRITE,
-        Timestamp: TsFromKtime(event.Timestamp),
-        Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "tty_name", Value: ttyName},
-            events.IpcMetadataPair{Name: "dst_sid", Value: event.DstSid},
-            events.IpcMetadataPair{Name: "count", Value: event.Count},
-        },
-        Bytes: eventBytes,
-    }
-    return events.EmitIpcEvent(e)
+	ttyName := nullStr(event.TtyName[:])
+	e := events.IpcEvent{
+		Src:       makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
+		Dst:       makeIpcEndpoint(commId, event.DstPid, event.DstComm),
+		Type:      events.IPC_EVENT_PTY_WRITE,
+		Timestamp: TsFromKtime(event.Timestamp),
+		Metadata: events.IpcMetadata{
+			events.IpcMetadataPair{Name: "tty_name", Value: ttyName},
+			events.IpcMetadataPair{Name: "dst_sid", Value: event.DstSid},
+			events.IpcMetadataPair{Name: "count", Value: event.Count},
+		},
+		Bytes: eventBytes,
+	}
+	return events.EmitIpcEvent(e)
 }
 
-
 func InitPtyWriteCollection(bpfBuilder *bpf.BpfBuilder) error {
-    if err := bpfBuilder.AddIncludes(ptyWriteIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(ptyWriteSource)
-    return nil
+	if err := bpfBuilder.AddIncludes(ptyWriteIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(ptyWriteSource)
+	return nil
 }
 
 func installPtyHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    kprobe, err := module.LoadKprobe("retprobe_pty_write");
-    if err != nil {
-        return err
-    }
-    if err = module.AttachKretprobe("pty_write", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err := module.LoadKprobe("retprobe_pty_write")
+	if err != nil {
+		return err
+	}
+	if err = module.AttachKretprobe("pty_write", kprobe, -1); err != nil {
+		return err
+	}
 
-    kprobe, err = module.LoadKprobe("probe_pty_write")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKprobe("pty_write", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err = module.LoadKprobe("probe_pty_write")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKprobe("pty_write", kprobe, -1); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
-    perfChannel := make(chan []byte, 1024)
-    lostChannel := make(chan uint64, 32)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", lostChannel)
-    if err != nil {
-        return err
-    }
+	perfChannel := make(chan []byte, 1024)
+	lostChannel := make(chan uint64, 32)
+	perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", lostChannel)
+	if err != nil {
+		return err
+	}
 
-    perfMap.Start()
-    defer perfMap.Stop()
+	perfMap.Start()
+	defer perfMap.Stop()
 
-    if err := installPtyHooks(bpfMod); err != nil {
-        return err
-    }
+	if err := installPtyHooks(bpfMod); err != nil {
+		return err
+	}
 
-    for {
-        select {
-        case perfData := <-perfChannel:
-            var event ptyWriteEvent
-            eventMetadata := perfData[:unsafe.Sizeof(event)]
-            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse pty write event: %w", err)
-            }
-            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-            if err := handlePtyWriteEvent(&event, eventBytes, commId); err != nil {
-                return fmt.Errorf("failed to handle pty write event: %w", err)
-            }
+	for {
+		select {
+		case perfData := <-perfChannel:
+			var event ptyWriteEvent
+			eventMetadata := perfData[:unsafe.Sizeof(event)]
+			if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
+				return fmt.Errorf("failed to parse pty write event: %w", err)
+			}
+			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+			if err := handlePtyWriteEvent(&event, eventBytes, commId); err != nil {
+				return fmt.Errorf("failed to handle pty write event: %w", err)
+			}
 
-        case lost := <-lostChannel:
-            events.EmitLostIpcEvents(events.IPC_EVENT_PTY_WRITE, lost)
+		case lost := <-lostChannel:
+			events.EmitLostIpcEvents(events.IPC_EVENT_PTY_WRITE, lost)
 
-        case <- exit:
-            return nil
-        }
-    }
+		case <-exit:
+			return nil
+		}
+	}
 }

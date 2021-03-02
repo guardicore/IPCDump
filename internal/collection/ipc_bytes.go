@@ -1,9 +1,10 @@
 package collection
 
 import (
-    "fmt"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"fmt"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
 )
 
 var bpfUtilSource = `
@@ -40,21 +41,21 @@ var bpfUtilSource = `
 `
 
 func SetupIpcBytesOutput(bpfBuilder *bpf.BpfBuilder, dumpBytes bool, dumpBytesMax uint) error {
-    if dumpBytes {
-        bpfBuilder.AddSources("#define COLLECT_IPC_BYTES")
-        if dumpBytesMax > 0 {
-            bpfBuilder.AddSources(fmt.Sprintf("#define COLLECT_IPC_BYTES_MAX (%v)", dumpBytesMax))
-        }
+	if dumpBytes {
+		bpfBuilder.AddSources("#define COLLECT_IPC_BYTES")
+		if dumpBytesMax > 0 {
+			bpfBuilder.AddSources(fmt.Sprintf("#define COLLECT_IPC_BYTES_MAX (%v)", dumpBytesMax))
+		}
 
-        bytesLimit := -1
-        if dumpBytesMax != 0 {
-            bytesLimit = (int)(dumpBytesMax)
-        }
-        if err := events.SetEmitOutputBytesLimit(bytesLimit); err != nil {
-            return fmt.Errorf("failed to set output bytes limit: %w\n", err)
-        }
-    }
+		bytesLimit := -1
+		if dumpBytesMax != 0 {
+			bytesLimit = (int)(dumpBytesMax)
+		}
+		if err := events.SetEmitOutputBytesLimit(bytesLimit); err != nil {
+			return fmt.Errorf("failed to set output bytes limit: %w\n", err)
+		}
+	}
 
-    bpfBuilder.AddSources(bpfUtilSource)
-    return nil
+	bpfBuilder.AddSources(bpfUtilSource)
+	return nil
 }

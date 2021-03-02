@@ -1,8 +1,9 @@
 package collection
 
 import (
-    "fmt"
-    "github.com/guardicode/ipcdump/internal/bpf"
+	"fmt"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
 )
 
 // Lots of hooks here, but they all do pretty much the same thing: any time someone creates a new
@@ -147,93 +148,92 @@ static inline int get_pid_comm_for_socket(u64 *pid, char *comm, size_t len, stru
 `
 
 type inodeProcessInfo struct {
-    Fd uint64
-    Pid uint64
-    ProcessStartTime uint64
+	Fd               uint64
+	Pid              uint64
+	ProcessStartTime uint64
 }
 
 type SocketIdentifier struct {
-    inodeInfoMap map[uint64]inodeProcessInfo
+	inodeInfoMap map[uint64]inodeProcessInfo
 }
 
 func SetupSockIdCollectionBpf(bpfBuilder *bpf.BpfBuilder) error {
-    if err := bpfBuilder.AddIncludes(sockIdIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(sockIdSource)
-    return nil
+	if err := bpfBuilder.AddIncludes(sockIdIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(sockIdSource)
+	return nil
 }
 
 func installSockIdHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    kprobe, err := module.LoadKprobe("probe_sk_destruct")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKprobe("sk_destruct", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err := module.LoadKprobe("probe_sk_destruct")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKprobe("sk_destruct", kprobe, -1); err != nil {
+		return err
+	}
 
-    kprobe, err = module.LoadKprobe("retprobe_sockfd_lookupX")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKretprobe("sockfd_lookup", kprobe, -1); err != nil {
-        return err
-    }
-    if err := module.AttachKretprobe("sockfd_lookup_light", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err = module.LoadKprobe("retprobe_sockfd_lookupX")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKretprobe("sockfd_lookup", kprobe, -1); err != nil {
+		return err
+	}
+	if err := module.AttachKretprobe("sockfd_lookup_light", kprobe, -1); err != nil {
+		return err
+	}
 
-    kprobe, err = module.LoadKprobe("retprobe_inet_csk_accept")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKretprobe("inet_csk_accept", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err = module.LoadKprobe("retprobe_inet_csk_accept")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKretprobe("inet_csk_accept", kprobe, -1); err != nil {
+		return err
+	}
 
-    kprobe, err = module.LoadKprobe("retprobe_sk_clone_lock")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKretprobe("sk_clone_lock", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err = module.LoadKprobe("retprobe_sk_clone_lock")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKretprobe("sk_clone_lock", kprobe, -1); err != nil {
+		return err
+	}
 
-    kprobe, err = module.LoadKprobe("probe_sk_clone_lock")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKprobe("sk_clone_lock", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err = module.LoadKprobe("probe_sk_clone_lock")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKprobe("sk_clone_lock", kprobe, -1); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func NewSocketIdentifier(bpfMod *bpf.BpfModule) (*SocketIdentifier, error) {
-    if err := installSockIdHooks(bpfMod); err != nil {
-        return nil, err
-    }
+	if err := installSockIdHooks(bpfMod); err != nil {
+		return nil, err
+	}
 
-    var s SocketIdentifier
-    var err error
-    s.inodeInfoMap, err = ScanProcessSocketInodes()
-    if err != nil {
-        return nil, fmt.Errorf("failed initial scan for process socket inodes: %w", err)
-    }
+	var s SocketIdentifier
+	var err error
+	s.inodeInfoMap, err = ScanProcessSocketInodes()
+	if err != nil {
+		return nil, fmt.Errorf("failed initial scan for process socket inodes: %w", err)
+	}
 
-    return &s, nil
+	return &s, nil
 }
 
 func (s SocketIdentifier) GuessMissingSockPidFromUsermode(inode uint64) (uint64, bool) {
-    info, ok := s.inodeInfoMap[inode]
-    if (!ok) {
-        return 0, false
-    }
-    return info.Pid, true
+	info, ok := s.inodeInfoMap[inode]
+	if !ok {
+		return 0, false
+	}
+	return info.Pid, true
 }
-

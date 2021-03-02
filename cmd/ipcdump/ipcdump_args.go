@@ -1,7 +1,7 @@
 package main
 
 import (
-    "strconv"
+	"strconv"
 )
 
 type uintArrayFlags []uint64
@@ -11,10 +11,10 @@ func (i *uintArrayFlags) String() string {
 }
 
 func (i *uintArrayFlags) Set(value string) error {
-    u, err := strconv.ParseUint(value, 0, 32)
-    if err != nil {
-        return err
-    }
+	u, err := strconv.ParseUint(value, 0, 32)
+	if err != nil {
+		return err
+	}
 	*i = append(*i, u)
 	return nil
 }

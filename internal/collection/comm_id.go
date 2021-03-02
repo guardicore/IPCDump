@@ -1,9 +1,10 @@
 package collection
 
 import (
-    "fmt"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"fmt"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
 )
 
 const commSource = `
@@ -85,91 +86,90 @@ static inline int get_comm_for_pid(u64 pid, char *comm, size_t len) {
 `
 
 type CommIdentifier struct {
-    pidCommMap map[uint64]string
+	pidCommMap map[uint64]string
 }
 
 func SetupCommCollectionBpf(bpfBuilder *bpf.BpfBuilder) error {
-    bpfBuilder.AddSources(commSource)
-    return nil
+	bpfBuilder.AddSources(commSource)
+	return nil
 }
 
 func installCommIdHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    // we use process_free rather than process_exit because it happens later, and we sometimes
-    // miss very quickly spawning-and-dying processes
-    tracepoint, err := module.LoadTracepoint("trace_sched_process_free")
-    if err != nil {
-        return err
-    }
-    if err = module.AttachTracepoint("sched:sched_process_free", tracepoint); err != nil {
-        return err
-    }
+	// we use process_free rather than process_exit because it happens later, and we sometimes
+	// miss very quickly spawning-and-dying processes
+	tracepoint, err := module.LoadTracepoint("trace_sched_process_free")
+	if err != nil {
+		return err
+	}
+	if err = module.AttachTracepoint("sched:sched_process_free", tracepoint); err != nil {
+		return err
+	}
 
-    tracepoint, err = module.LoadTracepoint("trace_task_rename")
-    if err != nil {
-        return err
-    }
-    if err = module.AttachTracepoint("task:task_rename", tracepoint); err != nil {
-        return err
-    }
+	tracepoint, err = module.LoadTracepoint("trace_task_rename")
+	if err != nil {
+		return err
+	}
+	if err = module.AttachTracepoint("task:task_rename", tracepoint); err != nil {
+		return err
+	}
 
-    tracepoint, err = module.LoadTracepoint("trace_task_newtask")
-    if err != nil {
-        return err
-    }
-    if err = module.AttachTracepoint("task:task_newtask", tracepoint); err != nil {
-        return err
-    }
+	tracepoint, err = module.LoadTracepoint("trace_task_newtask")
+	if err != nil {
+		return err
+	}
+	if err = module.AttachTracepoint("task:task_newtask", tracepoint); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 var commIdHooksInstalled = false
 
 func NewCommIdentifier(bpfMod *bpf.BpfModule) (*CommIdentifier, error) {
-    if !commIdHooksInstalled {
-        if err := installCommIdHooks(bpfMod); err != nil {
-            return nil, err
-        }
-        commIdHooksInstalled = true
-    }
+	if !commIdHooksInstalled {
+		if err := installCommIdHooks(bpfMod); err != nil {
+			return nil, err
+		}
+		commIdHooksInstalled = true
+	}
 
-    var c CommIdentifier
-    var err error
-    c.pidCommMap, err = ScanProcessComms()
-    if err != nil {
-        return nil, fmt.Errorf("failed initial scan for process comms: %w", err)
-    }
+	var c CommIdentifier
+	var err error
+	c.pidCommMap, err = ScanProcessComms()
+	if err != nil {
+		return nil, fmt.Errorf("failed initial scan for process comms: %w", err)
+	}
 
-    return &c, nil
+	return &c, nil
 }
 
 func (c CommIdentifier) CommForPid(pid int64, comm [16]byte) string {
-    str := commStr(comm)
-    if len(str) != 0 {
-        return str
-    }
+	str := commStr(comm)
+	if len(str) != 0 {
+		return str
+	}
 
-    if pid < 0 {
-        return "<unknown>"
-    }
+	if pid < 0 {
+		return "<unknown>"
+	}
 
-    scannedComm, ok := c.pidCommMap[(uint64)(pid)]
-    if !ok {
-        return "<unknown>"
-    }
+	scannedComm, ok := c.pidCommMap[(uint64)(pid)]
+	if !ok {
+		return "<unknown>"
+	}
 
-    return scannedComm
+	return scannedComm
 }
 
 func makeIpcEndpointI(commId *CommIdentifier, pid int64, comm [16]byte) events.IpcEndpoint {
-    return events.IpcEndpoint{Pid: pid,
-        Comm: commId.CommForPid(pid, comm)}
+	return events.IpcEndpoint{Pid: pid,
+		Comm: commId.CommForPid(pid, comm)}
 }
 
 func makeIpcEndpoint(commId *CommIdentifier, pid uint64, comm [16]byte) events.IpcEndpoint {
-    return makeIpcEndpointI(commId, (int64)(pid), comm)
+	return makeIpcEndpointI(commId, (int64)(pid), comm)
 }
-

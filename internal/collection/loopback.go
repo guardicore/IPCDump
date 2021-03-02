@@ -1,14 +1,15 @@
 package collection
 
 import (
-    "fmt"
-    "unsafe"
-    "bytes"
-    "syscall"
-    "encoding/binary"
-    "github.com/iovisor/gobpf/bcc"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"syscall"
+	"unsafe"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/iovisor/gobpf/bcc"
 )
 
 // We need a common code point that gives us access to both the source and the destination of each
@@ -190,151 +191,150 @@ int probe_udp_queue_rcv_skb(struct pt_regs *ctx,
 `
 
 type loopbackSockIpcEvent struct {
-    SrcPid uint64
-    SrcComm [16]byte
-    DstPid uint64
-    DstComm [16]byte
-    Count uint64
-    DstInode uint64
-    Timestamp uint64
-    SrcPort uint16
-    DstPort uint16
-    Proto uint8
-    _ uint8
-    _ uint16
-    BytesLen uint16
+	SrcPid    uint64
+	SrcComm   [16]byte
+	DstPid    uint64
+	DstComm   [16]byte
+	Count     uint64
+	DstInode  uint64
+	Timestamp uint64
+	SrcPort   uint16
+	DstPort   uint16
+	Proto     uint8
+	_         uint8
+	_         uint16
+	BytesLen  uint16
 }
 
 var (
-    collectLoopbackTcp = false
-    collectLoopbackUdp = false
+	collectLoopbackTcp = false
+	collectLoopbackUdp = false
 )
 
 func InitLoopbackIpcCollection(bpfBuilder *bpf.BpfBuilder, tcp bool, udp bool) error {
-    if (tcp || udp) == false {
-        return nil
-    }
-    if err := bpfBuilder.AddIncludes(loopbackIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(loopbackSource)
+	if (tcp || udp) == false {
+		return nil
+	}
+	if err := bpfBuilder.AddIncludes(loopbackIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(loopbackSource)
 
-    collectLoopbackTcp = tcp
-    collectLoopbackUdp = udp
-    return nil
+	collectLoopbackTcp = tcp
+	collectLoopbackUdp = udp
+	return nil
 }
 
 func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier) error {
 
-    dstPid := (int64)(event.DstPid)
-    if dstPid <= 0 {
-        dstPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.DstInode)
-        if !ok {
-            dstPid = -1
-        } else {
-            dstPid = (int64)(dstPidU)
-        }
-    }
+	dstPid := (int64)(event.DstPid)
+	if dstPid <= 0 {
+		dstPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.DstInode)
+		if !ok {
+			dstPid = -1
+		} else {
+			dstPid = (int64)(dstPidU)
+		}
+	}
 
-    var eventType events.EmittedEventType
-    switch event.Proto {
-    case syscall.IPPROTO_TCP:
-        eventType = events.IPC_EVENT_LOOPBACK_SOCK_TCP
-    case syscall.IPPROTO_UDP:
-        eventType = events.IPC_EVENT_LOOPBACK_SOCK_UDP
-    default:
-        return fmt.Errorf("unix ipc event had unexpected proto %d", event.Proto)
-    }
-    e := events.IpcEvent{
-        Src: makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
-        Dst: makeIpcEndpointI(commId, dstPid, event.DstComm),
-        Type: eventType,
-        Timestamp: TsFromKtime(event.Timestamp),
-        Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "src_port", Value: event.SrcPort},
-            events.IpcMetadataPair{Name: "src_serv", Value: servName(event.Proto, event.SrcPort)},
-            events.IpcMetadataPair{Name: "dst_port", Value: event.DstPort},
-            events.IpcMetadataPair{Name: "dst_serv", Value: servName(event.Proto, event.DstPort)},
-            events.IpcMetadataPair{Name: "dst_inode", Value: event.DstInode},
-            events.IpcMetadataPair{Name: "count", Value: event.Count},
-        },
-        Bytes: eventBytes,
-    }
-    return events.EmitIpcEvent(e)
+	var eventType events.EmittedEventType
+	switch event.Proto {
+	case syscall.IPPROTO_TCP:
+		eventType = events.IPC_EVENT_LOOPBACK_SOCK_TCP
+	case syscall.IPPROTO_UDP:
+		eventType = events.IPC_EVENT_LOOPBACK_SOCK_UDP
+	default:
+		return fmt.Errorf("unix ipc event had unexpected proto %d", event.Proto)
+	}
+	e := events.IpcEvent{
+		Src:       makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
+		Dst:       makeIpcEndpointI(commId, dstPid, event.DstComm),
+		Type:      eventType,
+		Timestamp: TsFromKtime(event.Timestamp),
+		Metadata: events.IpcMetadata{
+			events.IpcMetadataPair{Name: "src_port", Value: event.SrcPort},
+			events.IpcMetadataPair{Name: "src_serv", Value: servName(event.Proto, event.SrcPort)},
+			events.IpcMetadataPair{Name: "dst_port", Value: event.DstPort},
+			events.IpcMetadataPair{Name: "dst_serv", Value: servName(event.Proto, event.DstPort)},
+			events.IpcMetadataPair{Name: "dst_inode", Value: event.DstInode},
+			events.IpcMetadataPair{Name: "count", Value: event.Count},
+		},
+		Bytes: eventBytes,
+	}
+	return events.EmitIpcEvent(e)
 }
 
 func installLoopbackHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    if collectLoopbackTcp {
-        kprobe, err := module.LoadKprobe("probe_tcp_rcv_established")
-        if err != nil {
-            return err
-        }
-        if err := module.AttachKprobe("tcp_rcv_established", kprobe, -1); err != nil {
-            return err
-        }
-    }
+	if collectLoopbackTcp {
+		kprobe, err := module.LoadKprobe("probe_tcp_rcv_established")
+		if err != nil {
+			return err
+		}
+		if err := module.AttachKprobe("tcp_rcv_established", kprobe, -1); err != nil {
+			return err
+		}
+	}
 
-    if collectLoopbackUdp {
-        kprobe, err := module.LoadKprobe("probe_udp_queue_rcv_skb")
-        if err != nil {
-            return err
-        }
-        if err := module.AttachKprobe("udp_queue_rcv_skb", kprobe, -1); err != nil {
-            return err
-        }
-        // these have separate paths for ipv4/ipv6 in udp, unlike tcp
-        if err := module.AttachKprobe("udpv6_queue_rcv_skb", kprobe, -1); err != nil {
-            return err
-        }
-    }
+	if collectLoopbackUdp {
+		kprobe, err := module.LoadKprobe("probe_udp_queue_rcv_skb")
+		if err != nil {
+			return err
+		}
+		if err := module.AttachKprobe("udp_queue_rcv_skb", kprobe, -1); err != nil {
+			return err
+		}
+		// these have separate paths for ipv4/ipv6 in udp, unlike tcp
+		if err := module.AttachKprobe("udpv6_queue_rcv_skb", kprobe, -1); err != nil {
+			return err
+		}
+	}
 
-    return nil
+	return nil
 }
 
 func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier) error {
 
-    if (collectLoopbackTcp || collectLoopbackUdp) == false {
-        return nil
-    }
+	if (collectLoopbackTcp || collectLoopbackUdp) == false {
+		return nil
+	}
 
-    perfChannel := make(chan []byte, 4096)
-    lostChannel := make(chan uint64, 32)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "loopback_events", lostChannel)
-    if err != nil {
-        return err
-    }
+	perfChannel := make(chan []byte, 4096)
+	lostChannel := make(chan uint64, 32)
+	perfMap, err := bpfMod.InitPerfMap(perfChannel, "loopback_events", lostChannel)
+	if err != nil {
+		return err
+	}
 
-    perfMap.Start()
-    defer perfMap.Stop()
+	perfMap.Start()
+	defer perfMap.Stop()
 
-    if err := installLoopbackHooks(bpfMod); err != nil {
-        return err
-    }
+	if err := installLoopbackHooks(bpfMod); err != nil {
+		return err
+	}
 
-    for {
-        select {
-        case perfData := <-perfChannel:
-            var event loopbackSockIpcEvent
-            eventMetadata := perfData[:unsafe.Sizeof(event)]
-            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse signal event: %w", err)
-            }
-            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-            if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
-                return fmt.Errorf("failed to handle loopback sock event: %w", err)
-            }
+	for {
+		select {
+		case perfData := <-perfChannel:
+			var event loopbackSockIpcEvent
+			eventMetadata := perfData[:unsafe.Sizeof(event)]
+			if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
+				return fmt.Errorf("failed to parse signal event: %w", err)
+			}
+			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+			if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
+				return fmt.Errorf("failed to handle loopback sock event: %w", err)
+			}
 
-        case lost := <-lostChannel:
-            events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
+		case lost := <-lostChannel:
+			events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
-        case <- exit:
-            return nil
-        }
-    }
+		case <-exit:
+			return nil
+		}
+	}
 }
-
