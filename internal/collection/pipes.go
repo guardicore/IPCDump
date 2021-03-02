@@ -1,13 +1,14 @@
 package collection
 
 import (
-    "fmt"
-    "unsafe"
-    "bytes"
-    "encoding/binary"
-    "github.com/iovisor/gobpf/bcc"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"unsafe"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/iovisor/gobpf/bcc"
 )
 
 // probe_pipe_write() saves the last pid/comm that wrote to the pipe's inode.
@@ -267,113 +268,113 @@ ssize_t probe_pipe_write(struct pt_regs *ctx, struct kiocb *iocb, struct iov_ite
 `
 
 type pipeIoEvent struct {
-    SrcPid uint64
-    SrcComm [16]byte
-    DstPid uint64
-    DstComm [16]byte
-    PipeName [256]byte
-    PipeInode uint64
-    Count uint64
-    Timestamp uint64
-    BytesLen uint16
+	SrcPid    uint64
+	SrcComm   [16]byte
+	DstPid    uint64
+	DstComm   [16]byte
+	PipeName  [256]byte
+	PipeInode uint64
+	Count     uint64
+	Timestamp uint64
+	BytesLen  uint16
 }
 
 func InitPipeIpcCollection(bpfBuilder *bpf.BpfBuilder) error {
-    if err := bpfBuilder.AddIncludes(pipeIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(pipeSource)
-    return nil
+	if err := bpfBuilder.AddIncludes(pipeIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(pipeSource)
+	return nil
 }
 
 func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte) error {
-    pipeName := nullStr(event.PipeName[:])
-    if len(pipeName) == 0 {
-        pipeName = "<anonymous>"
-    }
-    e := events.IpcEvent{
-        Src: events.IpcEndpoint{Pid: (int64)(event.SrcPid), Comm: commStr(event.SrcComm)},
-        Dst: events.IpcEndpoint{Pid: (int64)(event.DstPid), Comm: commStr(event.DstComm)},
-        Type: events.IPC_EVENT_PIPE,
-        Timestamp: TsFromKtime(event.Timestamp),
-        Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "pipe_name", Value: pipeName},
-            events.IpcMetadataPair{Name: "pipe_inode", Value: event.PipeInode},
-            events.IpcMetadataPair{Name: "count", Value: event.Count},
-        },
-        Bytes: eventBytes,
-    }
-    return events.EmitIpcEvent(e)
+	pipeName := nullStr(event.PipeName[:])
+	if len(pipeName) == 0 {
+		pipeName = "<anonymous>"
+	}
+	e := events.IpcEvent{
+		Src:       events.IpcEndpoint{Pid: (int64)(event.SrcPid), Comm: commStr(event.SrcComm)},
+		Dst:       events.IpcEndpoint{Pid: (int64)(event.DstPid), Comm: commStr(event.DstComm)},
+		Type:      events.IPC_EVENT_PIPE,
+		Timestamp: TsFromKtime(event.Timestamp),
+		Metadata: events.IpcMetadata{
+			events.IpcMetadataPair{Name: "pipe_name", Value: pipeName},
+			events.IpcMetadataPair{Name: "pipe_inode", Value: event.PipeInode},
+			events.IpcMetadataPair{Name: "count", Value: event.Count},
+		},
+		Bytes: eventBytes,
+	}
+	return events.EmitIpcEvent(e)
 }
 
 func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    kprobe, err := module.LoadKprobe("probe___destroy_inode")
-    if err != nil {
-        return err
-    }
-    if err := module.AttachKprobe("__destroy_inode", kprobe, -1); err != nil {
-        return err
-    }
+	kprobe, err := module.LoadKprobe("probe___destroy_inode")
+	if err != nil {
+		return err
+	}
+	if err := module.AttachKprobe("__destroy_inode", kprobe, -1); err != nil {
+		return err
+	}
 
-    if kprobe, err = module.LoadKprobe("probe_pipe_write"); err != nil {
-        return err
-    }
-    if err = module.AttachKprobe("pipe_write", kprobe, -1); err != nil {
-        return err
-    }
+	if kprobe, err = module.LoadKprobe("probe_pipe_write"); err != nil {
+		return err
+	}
+	if err = module.AttachKprobe("pipe_write", kprobe, -1); err != nil {
+		return err
+	}
 
-    if kprobe, err = module.LoadKprobe("retprobe_pipe_read"); err != nil {
-        return err
-    }
-    if err = module.AttachKretprobe("pipe_read", kprobe, -1); err != nil {
-        return err
-    }
-    if kprobe, err = module.LoadKprobe("probe_pipe_read"); err != nil {
-        return err
-    }
-    if err = module.AttachKprobe("pipe_read", kprobe, -1); err != nil {
-        return err
-    }
+	if kprobe, err = module.LoadKprobe("retprobe_pipe_read"); err != nil {
+		return err
+	}
+	if err = module.AttachKretprobe("pipe_read", kprobe, -1); err != nil {
+		return err
+	}
+	if kprobe, err = module.LoadKprobe("probe_pipe_read"); err != nil {
+		return err
+	}
+	if err = module.AttachKprobe("pipe_read", kprobe, -1); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
-    perfChannel := make(chan []byte, 1024)
-    lostChannel := make(chan uint64, 32)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", lostChannel)
-    if err != nil {
-        return err
-    }
+	perfChannel := make(chan []byte, 1024)
+	lostChannel := make(chan uint64, 32)
+	perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", lostChannel)
+	if err != nil {
+		return err
+	}
 
-    perfMap.Start()
-    defer perfMap.Stop()
+	perfMap.Start()
+	defer perfMap.Stop()
 
-    if err := installPipeIpcHooks(bpfMod); err != nil {
-        return err
-    }
+	if err := installPipeIpcHooks(bpfMod); err != nil {
+		return err
+	}
 
-    for {
-        select {
-        case perfData := <-perfChannel:
-            var event pipeIoEvent
-            eventMetadata := perfData[:unsafe.Sizeof(event)]
-            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse pipe io event: %w", err)
-            }
-            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-            if err := handlePipeIoEvent(&event, eventBytes); err != nil {
-                return fmt.Errorf("failed to handle pipe io event: %w", err)
-            }
+	for {
+		select {
+		case perfData := <-perfChannel:
+			var event pipeIoEvent
+			eventMetadata := perfData[:unsafe.Sizeof(event)]
+			if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
+				return fmt.Errorf("failed to parse pipe io event: %w", err)
+			}
+			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+			if err := handlePipeIoEvent(&event, eventBytes); err != nil {
+				return fmt.Errorf("failed to handle pipe io event: %w", err)
+			}
 
-        case lost := <-lostChannel:
-            events.EmitLostIpcEvents(events.IPC_EVENT_PIPE, lost)
+		case lost := <-lostChannel:
+			events.EmitLostIpcEvents(events.IPC_EVENT_PIPE, lost)
 
-        case <- exit:
-            return nil
-        }
-    }
+		case <-exit:
+			return nil
+		}
+	}
 }

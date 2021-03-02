@@ -13,9 +13,9 @@ package collection
 import "C"
 
 import (
-    "syscall"
-    "fmt"
-    "os"
+	"fmt"
+	"os"
+	"syscall"
 )
 
 type PtyError struct {
@@ -51,5 +51,3 @@ func OpenTestPty() (pty *os.File, processTTY string, err error) {
 	processTTY = C.GoString(C.ptsname(m))
 	return os.NewFile(uintptr(m), "pty"), processTTY, nil
 }
-
-

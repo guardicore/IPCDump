@@ -1,18 +1,19 @@
 package collection
 
 import (
-    "fmt"
-    "bytes"
-    "unsafe"
-    "encoding/binary"
-    "github.com/iovisor/gobpf/bcc"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"unsafe"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/iovisor/gobpf/bcc"
 )
 
 // These hooks aren't particularly complicated, but there's a lot of boilerplate to them.
 // (Particularly to extracting the unix socket path from the sockets.)
-// Datagram sockets don't store a connection state, so we can't always figure out who 
+// Datagram sockets don't store a connection state, so we can't always figure out who
 // the sender is directly; we fill that in based on the source inode where necessary.
 // The other issue that complicates these hooks is that unix_stream_sendmsg() and
 // unix_dgram_recvmsg() use struct iov_iter rather than simple pointer-length buffers.
@@ -371,204 +372,202 @@ int retprobe___skb_try_recv_datagram(struct pt_regs *ctx) {
 `
 
 var (
-    collectUnixStreams = false
-    collectUnixDgrams = false
+	collectUnixStreams = false
+	collectUnixDgrams  = false
 )
 
 const (
-    UNIX_IPC_TYPE_NONE = 0
-    UNIX_IPC_TYPE_STREAM = iota
-    UNIX_IPC_TYPE_DGRAM = iota
+	UNIX_IPC_TYPE_NONE   = 0
+	UNIX_IPC_TYPE_STREAM = iota
+	UNIX_IPC_TYPE_DGRAM  = iota
 )
 
 type unixSockIpcEvent struct {
-    SrcPid uint64
-    SrcComm [16]byte
-    DstPid uint64
-    DstComm [16]byte
-    Count uint64
-    SrcInode uint64
-    Timestamp uint64
-    Path [108]byte
-    _ uint32
-    Type uint8
-    _ uint8
-    _ uint16
-    _ uint32
-    _ uint32
-    _ uint32
-    BytesLen uint16
+	SrcPid    uint64
+	SrcComm   [16]byte
+	DstPid    uint64
+	DstComm   [16]byte
+	Count     uint64
+	SrcInode  uint64
+	Timestamp uint64
+	Path      [108]byte
+	_         uint32
+	Type      uint8
+	_         uint8
+	_         uint16
+	_         uint32
+	_         uint32
+	_         uint32
+	BytesLen  uint16
 }
 
 func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier) error {
 
-    var eventType events.EmittedEventType
-    switch event.Type {
-    case UNIX_IPC_TYPE_STREAM:
-        eventType = events.IPC_EVENT_UNIX_SOCK_STREAM
-    case UNIX_IPC_TYPE_DGRAM:
-        eventType = events.IPC_EVENT_UNIX_SOCK_DGRAM
-    default:
-        return fmt.Errorf("unix ipc event had unexpected type %d", event.Type)
-    }
+	var eventType events.EmittedEventType
+	switch event.Type {
+	case UNIX_IPC_TYPE_STREAM:
+		eventType = events.IPC_EVENT_UNIX_SOCK_STREAM
+	case UNIX_IPC_TYPE_DGRAM:
+		eventType = events.IPC_EVENT_UNIX_SOCK_DGRAM
+	default:
+		return fmt.Errorf("unix ipc event had unexpected type %d", event.Type)
+	}
 
-    path := nullStr(event.Path[:])
-    if len(path) == 0 {
-        path = "<anonymous>"
-    }
+	path := nullStr(event.Path[:])
+	if len(path) == 0 {
+		path = "<anonymous>"
+	}
 
-    metadata := events.IpcMetadata{
-        events.IpcMetadataPair{Name: "path", Value: path},
-        events.IpcMetadataPair{Name: "count", Value: event.Count},
-    }
+	metadata := events.IpcMetadata{
+		events.IpcMetadataPair{Name: "path", Value: path},
+		events.IpcMetadataPair{Name: "count", Value: event.Count},
+	}
 
+	srcPid := (int64)(event.SrcPid)
+	if eventType == events.IPC_EVENT_UNIX_SOCK_DGRAM {
+		metadata = append(metadata,
+			events.IpcMetadataPair{Name: "src_inode", Value: event.SrcInode})
+		if srcPid <= 0 {
+			srcPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.SrcInode)
+			if !ok {
+				srcPid = -1
+			} else {
+				srcPid = (int64)(srcPidU)
+			}
+		}
+	}
 
-    srcPid := (int64)(event.SrcPid)
-    if eventType == events.IPC_EVENT_UNIX_SOCK_DGRAM {
-        metadata = append(metadata,
-            events.IpcMetadataPair{Name: "src_inode", Value: event.SrcInode})
-        if srcPid <= 0 {
-            srcPidU, ok := sockId.GuessMissingSockPidFromUsermode(event.SrcInode)
-            if !ok {
-                srcPid = -1
-            } else {
-                srcPid = (int64)(srcPidU)
-            }
-        }
-    }
-
-    e := events.IpcEvent{
-        Src: makeIpcEndpointI(commId, srcPid, event.SrcComm),
-        Dst: makeIpcEndpoint(commId, event.DstPid, event.DstComm),
-        Type: eventType,
-        Timestamp: TsFromKtime(event.Timestamp),
-        Metadata: metadata,
-        Bytes: eventBytes,
-    }
-    return events.EmitIpcEvent(e)
+	e := events.IpcEvent{
+		Src:       makeIpcEndpointI(commId, srcPid, event.SrcComm),
+		Dst:       makeIpcEndpoint(commId, event.DstPid, event.DstComm),
+		Type:      eventType,
+		Timestamp: TsFromKtime(event.Timestamp),
+		Metadata:  metadata,
+		Bytes:     eventBytes,
+	}
+	return events.EmitIpcEvent(e)
 }
 
 func InitUnixSocketIpcCollection(bpfBuilder *bpf.BpfBuilder, streams bool, dgrams bool) error {
-    if (streams || dgrams) == false {
-        return nil
-    }
+	if (streams || dgrams) == false {
+		return nil
+	}
 
-    if err := bpfBuilder.AddIncludes(unixIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(unixSource)
-    collectUnixStreams = streams
-    collectUnixDgrams = dgrams
-    return nil
+	if err := bpfBuilder.AddIncludes(unixIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(unixSource)
+	collectUnixStreams = streams
+	collectUnixDgrams = dgrams
+	return nil
 }
 
 func installUnixSocketHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    if collectUnixStreams {
-        kprobe, err := module.LoadKprobe("retprobe_unix_stream_sendmsg");
-        if err != nil {
-            return err
-        }
-        if err = module.AttachKretprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
-            return err
-        }
+	if collectUnixStreams {
+		kprobe, err := module.LoadKprobe("retprobe_unix_stream_sendmsg")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKretprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
+			return err
+		}
 
-        kprobe, err = module.LoadKprobe("probe_unix_stream_sendmsg")
-        if err != nil {
-            return err
-        }
-        if err = module.AttachKprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
-            return err
-        }
+		kprobe, err = module.LoadKprobe("probe_unix_stream_sendmsg")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
+			return err
+		}
 
-        kprobe, err = module.LoadKprobe("retprobe_skb_copy_datagram_from_iter")
-        if err != nil {
-            return err
-        }
-        if err = module.AttachKretprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
-            return err
-        }
-        kprobe, err = module.LoadKprobe("probe_skb_copy_datagram_from_iter")
-        if err != nil {
-            return err
-        }
-        if err = module.AttachKprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
-            return err
-        }
-    }
+		kprobe, err = module.LoadKprobe("retprobe_skb_copy_datagram_from_iter")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKretprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
+			return err
+		}
+		kprobe, err = module.LoadKprobe("probe_skb_copy_datagram_from_iter")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKprobe("skb_copy_datagram_from_iter", kprobe, -1); err != nil {
+			return err
+		}
+	}
 
-    if collectUnixDgrams {
-        kprobe, err := module.LoadKprobe("retprobe___skb_try_recv_datagram")
-        if err != nil {
-            return err
-        }
-        if err = module.AttachKretprobe("__skb_try_recv_datagram", kprobe, -1); err != nil {
-            return err
-        }
+	if collectUnixDgrams {
+		kprobe, err := module.LoadKprobe("retprobe___skb_try_recv_datagram")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKretprobe("__skb_try_recv_datagram", kprobe, -1); err != nil {
+			return err
+		}
 
-        kprobe, err = module.LoadKprobe("retprobe_unix_dgram_recvmsg"); if err != nil {
-            return err
-        }
-        if err = module.AttachKretprobe("unix_dgram_recvmsg", kprobe, -1); err != nil {
-            return err
-        }
+		kprobe, err = module.LoadKprobe("retprobe_unix_dgram_recvmsg")
+		if err != nil {
+			return err
+		}
+		if err = module.AttachKretprobe("unix_dgram_recvmsg", kprobe, -1); err != nil {
+			return err
+		}
 
-        if kprobe, err = module.LoadKprobe("probe_unix_dgram_recvmsg"); err != nil {
-            return err
-        }
-        if err = module.AttachKprobe("unix_dgram_recvmsg", kprobe, -1); err != nil {
-            return err
-        }
-    }
+		if kprobe, err = module.LoadKprobe("probe_unix_dgram_recvmsg"); err != nil {
+			return err
+		}
+		if err = module.AttachKprobe("unix_dgram_recvmsg", kprobe, -1); err != nil {
+			return err
+		}
+	}
 
-
-    return nil
+	return nil
 }
 
 // in theory we could pass sockId for just the datagram case
 func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
-    sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier) error {
 
-    if (collectUnixStreams || collectUnixDgrams) == false {
-        return nil
-    }
+	if (collectUnixStreams || collectUnixDgrams) == false {
+		return nil
+	}
 
-    perfChannel := make(chan []byte, 1024)
-    lostChannel := make(chan uint64, 32)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "unix_events", lostChannel)
-    if err != nil {
-        return err
-    }
+	perfChannel := make(chan []byte, 1024)
+	lostChannel := make(chan uint64, 32)
+	perfMap, err := bpfMod.InitPerfMap(perfChannel, "unix_events", lostChannel)
+	if err != nil {
+		return err
+	}
 
-    perfMap.Start()
-    defer perfMap.Stop()
+	perfMap.Start()
+	defer perfMap.Stop()
 
-    if err := installUnixSocketHooks(bpfMod); err != nil {
-        return err
-    }
+	if err := installUnixSocketHooks(bpfMod); err != nil {
+		return err
+	}
 
-    for {
-        select {
-        case perfData := <-perfChannel:
-            var event unixSockIpcEvent
-            eventMetadata := perfData[:unsafe.Sizeof(event)]
-            if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse unix sock ipc event: %w", err)
-            }
-            eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-            if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
-                return fmt.Errorf("failed to handle unix socket ipc event: %w", err)
-            }
+	for {
+		select {
+		case perfData := <-perfChannel:
+			var event unixSockIpcEvent
+			eventMetadata := perfData[:unsafe.Sizeof(event)]
+			if err := binary.Read(bytes.NewBuffer(eventMetadata), bcc.GetHostByteOrder(), &event); err != nil {
+				return fmt.Errorf("failed to parse unix sock ipc event: %w", err)
+			}
+			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
+			if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
+				return fmt.Errorf("failed to handle unix socket ipc event: %w", err)
+			}
 
-        case lost := <-lostChannel:
-            events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
+		case lost := <-lostChannel:
+			events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
-        case <- exit:
-            return nil
-        }
-    }
+		case <-exit:
+			return nil
+		}
+	}
 }
-

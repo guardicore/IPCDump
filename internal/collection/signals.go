@@ -1,13 +1,14 @@
 package collection
 
 import (
-    "fmt"
-    "bytes"
-    "encoding/binary"
-    "syscall"
-    "github.com/iovisor/gobpf/bcc"
-    "github.com/guardicode/ipcdump/internal/bpf"
-    "github.com/guardicode/ipcdump/internal/events"
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"syscall"
+
+	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/iovisor/gobpf/bcc"
 )
 
 const signalIncludes = "#include <linux/signal.h>"
@@ -61,84 +62,84 @@ int trace_signal_generate(struct signal_generate_args_t *args) {
 }`
 
 type signalIpcEvent struct {
-    Sig uint64
-    SrcPid uint64
-    SrcComm [16]byte
-    DstPid uint64
-    DstComm [16]byte
-    Timestamp uint64
+	Sig       uint64
+	SrcPid    uint64
+	SrcComm   [16]byte
+	DstPid    uint64
+	DstComm   [16]byte
+	Timestamp uint64
 }
 
 func handleSignalEvent(event *signalIpcEvent, commId *CommIdentifier) error {
-    signalNum := syscall.Signal(event.Sig)
-    e := events.IpcEvent{
-        Src: makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
-        Dst: makeIpcEndpoint(commId, event.DstPid, event.DstComm),
-        Type: events.IPC_EVENT_SIGNAL,
-        Timestamp: TsFromKtime(event.Timestamp),
-        Metadata: events.IpcMetadata{
-            events.IpcMetadataPair{Name: "num", Value: event.Sig},
-            events.IpcMetadataPair{Name: "name", Value: signalNum.String()},
-        },
-    }
-    return events.EmitIpcEvent(e)
+	signalNum := syscall.Signal(event.Sig)
+	e := events.IpcEvent{
+		Src:       makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
+		Dst:       makeIpcEndpoint(commId, event.DstPid, event.DstComm),
+		Type:      events.IPC_EVENT_SIGNAL,
+		Timestamp: TsFromKtime(event.Timestamp),
+		Metadata: events.IpcMetadata{
+			events.IpcMetadataPair{Name: "num", Value: event.Sig},
+			events.IpcMetadataPair{Name: "name", Value: signalNum.String()},
+		},
+	}
+	return events.EmitIpcEvent(e)
 }
 
 func InitSignalCollection(bpfBuilder *bpf.BpfBuilder) error {
-    if err := bpfBuilder.AddIncludes(signalIncludes); err != nil {
-        return err
-    }
-    bpfBuilder.AddSources(signalSource)
-    return nil
+	if err := bpfBuilder.AddIncludes(signalIncludes); err != nil {
+		return err
+	}
+	bpfBuilder.AddSources(signalSource)
+	return nil
 }
 
 func installSignalHooks(bpfMod *bpf.BpfModule) error {
-    module := bpfMod.Get()
-    defer bpfMod.Put()
+	module := bpfMod.Get()
+	defer bpfMod.Put()
 
-    tracepoint, err := module.LoadTracepoint("trace_signal_generate")
-    if err != nil {
-        return err
-    }
+	tracepoint, err := module.LoadTracepoint("trace_signal_generate")
+	if err != nil {
+		return err
+	}
 
-    if err = module.AttachTracepoint("signal:signal_generate", tracepoint); err != nil {
-        return err
-    }
+	if err = module.AttachTracepoint("signal:signal_generate", tracepoint); err != nil {
+		return err
+	}
 
-    return nil
+	return nil
 }
 
 func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
-    perfChannel := make(chan []byte, 32)
-    lostChannel := make(chan uint64, 8)
-    perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", lostChannel)
-    if err != nil {
-        return err
-    }
+	perfChannel := make(chan []byte, 32)
+	lostChannel := make(chan uint64, 8)
+	perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", lostChannel)
+	if err != nil {
+		return err
+	}
 
-    perfMap.Start()
-    defer perfMap.Stop()
+	perfMap.Start()
+	defer perfMap.Stop()
 
-    if err := installSignalHooks(bpfMod); err != nil {
-        return err
-    }
+	if err := installSignalHooks(bpfMod); err != nil {
+		return err
+	}
 
-    for {
-        select {
-        case perfData := <-perfChannel:
-            var event signalIpcEvent
-            if err := binary.Read(bytes.NewBuffer(perfData), bcc.GetHostByteOrder(), &event); err != nil {
-                return fmt.Errorf("failed to parse signal event: %w", err)
-            }
-            if err := handleSignalEvent(&event, commId); err != nil {
-                return fmt.Errorf("failed to handle signal event: %w", err)
-            }
+	for {
+		select {
+		case perfData := <-perfChannel:
+			var event signalIpcEvent
+			if err := binary.Read(bytes.NewBuffer(perfData), bcc.GetHostByteOrder(), &event); err != nil {
+				return fmt.Errorf("failed to parse signal event: %w", err)
+			}
+			if err := handleSignalEvent(&event, commId); err != nil {
+				return fmt.Errorf("failed to handle signal event: %w", err)
+			}
 
-        case lost := <-lostChannel:
-            events.EmitLostIpcEvents(events.IPC_EVENT_SIGNAL, lost)
+		case lost := <-lostChannel:
+			events.EmitLostIpcEvents(events.IPC_EVENT_SIGNAL, lost)
 
-        case <- exit:
-            return nil
-        }
-    }
+		case <-exit:
+			return nil
+		}
+	}
 }
