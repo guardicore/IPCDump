@@ -26,7 +26,7 @@ const (
 type outputFunc func(IpcEvent) error
 type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 
-var CSVHeader string = "timestamp,type,src_pid,src_comm,dst_pid,dst_comm\n"
+var CSVHeader string = "timestamp,type,src_pid,src_comm,dst_pid,dst_comm"
 var printCSVHeader = false
 var outputBytesLimit int = 0
 var limitEventCount bool = false
@@ -73,13 +73,17 @@ func (m IpcMetadata) MarshalJSON() ([]byte, error) {
 type indentedWriter struct{}
 
 func (w indentedWriter) Write(p []byte) (n int, err error) {
-	fmt.Printf("%s", strings.ReplaceAll(string(p), "\n", "\n\t"))
+	emitOutput("%s", strings.ReplaceAll(string(p), "\n", "\n\t"))
 	return len(p), nil
 }
 
-func dumpEventBytes(b []byte) {
-	var w indentedWriter
-	dumper := hex.Dumper(w)
+func emitOutput(output string, args ...interface{}) {
+	fmt.Printf(output+"\n", args...)
+}
+
+func getEventBytes(b []byte) string {
+	buf := new(bytes.Buffer)
+	dumper := hex.Dumper(buf)
 	defer dumper.Close()
 
 	slice := b
@@ -87,6 +91,7 @@ func dumpEventBytes(b []byte) {
 		slice = b[:outputBytesLimit]
 	}
 	dumper.Write(slice)
+	return buf.String()
 }
 
 func pidStr(pid int64) string {
@@ -101,25 +106,26 @@ func formatTimestamp(ts time.Time) string {
 }
 
 func printTimestamp(ts time.Time) {
-	fmt.Printf(formatTimestamp(ts))
+	emitOutput(formatTimestamp(ts))
 }
 
 func outputEmittedIpcEventText(e IpcEvent) error {
-	printTimestamp(e.Timestamp)
-	fmt.Printf(" %s %s(%s) > %s(%s)", e.Type,
-		pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
+	var output = fmt.Sprintf("%s %s %s(%s) > %s(%s)", formatTimestamp(e.Timestamp),
+		e.Type, pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
 	if e.Metadata != nil && len(e.Metadata) > 0 {
-		fmt.Printf(": %s %v", e.Metadata[0].Name, e.Metadata[0].Value)
+		output += fmt.Sprintf(": %s %v", e.Metadata[0].Name, e.Metadata[0].Value)
 		for _, m := range e.Metadata[1:] {
-			fmt.Printf(", %s %v", m.Name, m.Value)
+			output += fmt.Sprintf(", %s %v", m.Name, m.Value)
 		}
-		fmt.Printf("\n")
+		emitOutput(output)
+		output = ""
 	}
 	if outputBytesLimit != 0 {
 		if e.Bytes != nil && len(e.Bytes) > 0 {
-			fmt.Printf("\t")
-			dumpEventBytes(e.Bytes)
-			fmt.Printf("\n")
+			output += fmt.Sprintf("\t")
+			output += getEventBytes(e.Bytes)
+			emitOutput(output)
+			output = ""
 		}
 	}
 
@@ -128,7 +134,7 @@ func outputEmittedIpcEventText(e IpcEvent) error {
 
 func outputLostIpcEventsText(t EmittedEventType, lost uint64, ts time.Time) error {
 	printTimestamp(ts)
-	fmt.Printf(" %s: lost %d events\n", t, lost)
+	emitOutput(" %s: lost %d events", t, lost)
 	return nil
 }
 
@@ -177,7 +183,7 @@ func outputEmittedIpcEventCsv(e IpcEvent) error {
 		printCSVHeader = false
 	}
 
-	fmt.Printf("%s,%s,%s,%s,%s,%s\n", formatTimestamp(e.Timestamp), e.Type,
+	emitOutput("%s,%s,%s,%s,%s,%s", formatTimestamp(e.Timestamp), e.Type,
 		pidStr(e.Src.Pid), e.Src.Comm, pidStr(e.Dst.Pid), e.Dst.Comm)
 	return nil
 }
@@ -187,7 +193,7 @@ func outputLostIpcEventsCsv(t EmittedEventType, lost uint64, ts time.Time) error
 		fmt.Print(CSVHeader)
 		printCSVHeader = false
 	}
-	fmt.Printf("%s,%s,-,-,-,-\n", formatTimestamp(ts), t)
+	emitOutput("%s,%s,-,-,-,-", formatTimestamp(ts), t)
 	return nil
 }
 
