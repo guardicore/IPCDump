@@ -226,7 +226,7 @@ func InitLoopbackIpcCollection(bpfBuilder *bpf.BpfBuilder, tcp bool, udp bool) e
 }
 
 func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
-	sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 
 	dstPid := (int64)(event.DstPid)
 	if dstPid <= 0 {
@@ -262,7 +262,7 @@ func handleLoopbackSockIpcEvent(event *loopbackSockIpcEvent, eventBytes []byte, 
 		},
 		Bytes: eventBytes,
 	}
-	return events.EmitIpcEvent(e)
+	return ipcDataEmitter.EmitIpcEvent(e)
 }
 
 func installLoopbackHooks(bpfMod *bpf.BpfModule) error {
@@ -297,7 +297,7 @@ func installLoopbackHooks(bpfMod *bpf.BpfModule) error {
 }
 
 func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
-	sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 
 	if (collectLoopbackTcp || collectLoopbackUdp) == false {
 		return nil
@@ -326,12 +326,12 @@ func CollectLoopbackIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *Com
 				return fmt.Errorf("failed to parse signal event: %w", err)
 			}
 			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-			if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
+			if err := handleLoopbackSockIpcEvent(&event, eventBytes, commId, sockId, ipcDataEmitter); err != nil {
 				return fmt.Errorf("failed to handle loopback sock event: %w", err)
 			}
 
 		case lost := <-lostChannel:
-			events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
+			ipcDataEmitter.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
 		case <-exit:
 			return nil

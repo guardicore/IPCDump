@@ -70,7 +70,7 @@ type signalIpcEvent struct {
 	Timestamp uint64
 }
 
-func handleSignalEvent(event *signalIpcEvent, commId *CommIdentifier) error {
+func handleSignalEvent(event *signalIpcEvent, commId *CommIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 	signalNum := syscall.Signal(event.Sig)
 	e := events.IpcEvent{
 		Src:       makeIpcEndpoint(commId, event.SrcPid, event.SrcComm),
@@ -82,7 +82,7 @@ func handleSignalEvent(event *signalIpcEvent, commId *CommIdentifier) error {
 			events.IpcMetadataPair{Name: "name", Value: signalNum.String()},
 		},
 	}
-	return events.EmitIpcEvent(e)
+	return ipcDataEmitter.EmitIpcEvent(e)
 }
 
 func InitSignalCollection(bpfBuilder *bpf.BpfBuilder) error {
@@ -109,7 +109,7 @@ func installSignalHooks(bpfMod *bpf.BpfModule) error {
 	return nil
 }
 
-func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
+func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 	perfChannel := make(chan []byte, 32)
 	lostChannel := make(chan uint64, 8)
 	perfMap, err := bpfMod.InitPerfMap(perfChannel, "signal_events", lostChannel)
@@ -131,12 +131,12 @@ func CollectSignals(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIde
 			if err := binary.Read(bytes.NewBuffer(perfData), bcc.GetHostByteOrder(), &event); err != nil {
 				return fmt.Errorf("failed to parse signal event: %w", err)
 			}
-			if err := handleSignalEvent(&event, commId); err != nil {
+			if err := handleSignalEvent(&event, commId, ipcDataEmitter); err != nil {
 				return fmt.Errorf("failed to handle signal event: %w", err)
 			}
 
 		case lost := <-lostChannel:
-			events.EmitLostIpcEvents(events.IPC_EVENT_SIGNAL, lost)
+			ipcDataEmitter.EmitLostIpcEvents(events.IPC_EVENT_SIGNAL, lost)
 
 		case <-exit:
 			return nil

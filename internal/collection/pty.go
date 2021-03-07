@@ -140,7 +140,7 @@ func shouldSkipEvent(event *ptyWriteEvent) bool {
 	return false
 }
 
-func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommIdentifier) error {
+func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 	if shouldSkipEvent(event) {
 		return nil
 	}
@@ -158,7 +158,7 @@ func handlePtyWriteEvent(event *ptyWriteEvent, eventBytes []byte, commId *CommId
 		},
 		Bytes: eventBytes,
 	}
-	return events.EmitIpcEvent(e)
+	return ipcDataEmitter.EmitIpcEvent(e)
 }
 
 func InitPtyWriteCollection(bpfBuilder *bpf.BpfBuilder) error {
@@ -192,7 +192,7 @@ func installPtyHooks(bpfMod *bpf.BpfModule) error {
 	return nil
 }
 
-func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier) error {
+func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 	perfChannel := make(chan []byte, 1024)
 	lostChannel := make(chan uint64, 32)
 	perfMap, err := bpfMod.InitPerfMap(perfChannel, "pty_events", lostChannel)
@@ -216,12 +216,12 @@ func CollectPtyWrites(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommI
 				return fmt.Errorf("failed to parse pty write event: %w", err)
 			}
 			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-			if err := handlePtyWriteEvent(&event, eventBytes, commId); err != nil {
+			if err := handlePtyWriteEvent(&event, eventBytes, commId, ipcDataEmitter); err != nil {
 				return fmt.Errorf("failed to handle pty write event: %w", err)
 			}
 
 		case lost := <-lostChannel:
-			events.EmitLostIpcEvents(events.IPC_EVENT_PTY_WRITE, lost)
+			ipcDataEmitter.EmitLostIpcEvents(events.IPC_EVENT_PTY_WRITE, lost)
 
 		case <-exit:
 			return nil

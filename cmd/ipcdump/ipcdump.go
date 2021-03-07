@@ -67,10 +67,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if eventCountLimit != 0 {
-		events.SetEmitEventCountLimit(eventCountLimit)
-	}
-
 	events.FilterBySrcPids(filterBySrcPids)
 	events.FilterByDstPids(filterByDstPids)
 	events.FilterByAnyPids(filterByPids)
@@ -95,8 +91,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to set output format: %s\n", err)
 		os.Exit(1)
 	}
-
-	events.SetSkipLostIpcEvents(skipLostEvents)
 
 	if collectAllTypes {
 		collectSignals = true
@@ -231,12 +225,13 @@ func main() {
 
 	var wg sync.WaitGroup
 	exitChannel := make(chan struct{})
+	ipcDataEmitter := events.NewIpcDataEmitter(skipLostEvents, eventCountLimit != 0, eventCountLimit)
 
 	if collectSignals {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := collection.CollectSignals(bpfModule, exitChannel, commId); err != nil {
+			if err := collection.CollectSignals(bpfModule, exitChannel, commId, &ipcDataEmitter); err != nil {
 				fmt.Fprintf(os.Stderr, "signal collection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -256,7 +251,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := collection.CollectUnixSocketIpc(bpfModule, exitChannel, commId, sockId); err != nil {
+			if err := collection.CollectUnixSocketIpc(bpfModule, exitChannel, commId, sockId, &ipcDataEmitter); err != nil {
 				fmt.Fprintf(os.Stderr, "unix socket ipc collection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -267,7 +262,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := collection.CollectLoopbackIpc(bpfModule, exitChannel, commId, sockId); err != nil {
+			if err := collection.CollectLoopbackIpc(bpfModule, exitChannel, commId, sockId, &ipcDataEmitter); err != nil {
 				fmt.Fprintf(os.Stderr, "loopback ipc collection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -278,7 +273,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := collection.CollectPtyWrites(bpfModule, exitChannel, commId); err != nil {
+			if err := collection.CollectPtyWrites(bpfModule, exitChannel, commId, &ipcDataEmitter); err != nil {
 				fmt.Fprintf(os.Stderr, "pty write collection failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -289,7 +284,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := collection.CollectPipeIpc(bpfModule, exitChannel); err != nil {
+			if err := collection.CollectPipeIpc(bpfModule, exitChannel, &ipcDataEmitter); err != nil {
 				fmt.Fprintf(os.Stderr, "pipe ipc collection failed: %v\n", err)
 				os.Exit(1)
 			}
