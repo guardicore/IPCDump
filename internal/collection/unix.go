@@ -402,7 +402,7 @@ type unixSockIpcEvent struct {
 }
 
 func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *CommIdentifier,
-	sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 
 	var eventType events.EmittedEventType
 	switch event.Type {
@@ -446,7 +446,7 @@ func handleUnixSockIpcEvent(event *unixSockIpcEvent, eventBytes []byte, commId *
 		Metadata:  metadata,
 		Bytes:     eventBytes,
 	}
-	return events.EmitIpcEvent(e)
+	return ipcDataEmitter.EmitIpcEvent(e)
 }
 
 func InitUnixSocketIpcCollection(bpfBuilder *bpf.BpfBuilder, streams bool, dgrams bool) error {
@@ -530,7 +530,7 @@ func installUnixSocketHooks(bpfMod *bpf.BpfModule) error {
 
 // in theory we could pass sockId for just the datagram case
 func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *CommIdentifier,
-	sockId *SocketIdentifier) error {
+	sockId *SocketIdentifier, ipcDataEmitter *events.IpcDataEmitter) error {
 
 	if (collectUnixStreams || collectUnixDgrams) == false {
 		return nil
@@ -559,12 +559,12 @@ func CollectUnixSocketIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, commId *C
 				return fmt.Errorf("failed to parse unix sock ipc event: %w", err)
 			}
 			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-			if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId); err != nil {
+			if err := handleUnixSockIpcEvent(&event, eventBytes, commId, sockId, ipcDataEmitter); err != nil {
 				return fmt.Errorf("failed to handle unix socket ipc event: %w", err)
 			}
 
 		case lost := <-lostChannel:
-			events.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
+			ipcDataEmitter.EmitLostIpcEvents(events.IPC_EVENT_UNIX_SOCK_STREAM_OR_DGRAM, lost)
 
 		case <-exit:
 			return nil

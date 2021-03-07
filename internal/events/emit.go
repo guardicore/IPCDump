@@ -192,38 +192,32 @@ func isPidCommAllowed(srcPid int64, dstPid int64, srcComm string, dstComm string
 	return false
 }
 
-var skipLostEvents = false
-var limitEventCount bool = false
-var eventCountLimit uint = 0
-
-func SetEmitEventCountLimit(limit uint) {
-	if limit == 0 {
-		return
-	}
-	limitEventCount = true
-	eventCountLimit = limit
+type IpcDataEmitter struct {
+	skipLostEvents  bool
+	limitEventCount bool
+	eventCountLimit uint
 }
 
-func SetSkipLostIpcEvents(skip bool) {
-	skipLostEvents = skip
+func NewIpcDataEmitter(skipLostEvents bool, limitEventCount bool, eventCountLimit uint) IpcDataEmitter {
+	return IpcDataEmitter{skipLostEvents, limitEventCount, eventCountLimit}
 }
 
-func checkLimitEventCount() {
-	if !limitEventCount {
+func (ipc_data_emitter *IpcDataEmitter) checkLimitEventCount() {
+	if !ipc_data_emitter.limitEventCount {
 		return
 	}
 
-	if eventCountLimit == 0 {
+	if ipc_data_emitter.eventCountLimit == 0 {
 		os.Exit(1)
 	}
-
-	eventCountLimit--
+	ipc_data_emitter.eventCountLimit--
 }
-func EmitIpcEvent(event IpcEvent) error {
+
+func (ipc_data_emitter *IpcDataEmitter) EmitIpcEvent(event IpcEvent) error {
 	if !isPidCommAllowed(event.Src.Pid, event.Dst.Pid, event.Src.Comm, event.Dst.Comm) {
 		return nil
 	}
-	checkLimitEventCount()
+	ipc_data_emitter.checkLimitEventCount()
 
 	// we *could* filter by type here, too, but it's better to handle that at the hook-placement
 	// level so that we don't get too lazy
@@ -231,12 +225,12 @@ func EmitIpcEvent(event IpcEvent) error {
 	return outputIpcEvent(event)
 }
 
-func EmitLostIpcEvents(eventType EmittedEventType, lost uint64) error {
-	if skipLostEvents {
+func (ipc_data_emitter *IpcDataEmitter) EmitLostIpcEvents(eventType EmittedEventType, lost uint64) error {
+	if ipc_data_emitter.skipLostEvents {
 		return nil
 	}
 
-	checkLimitEventCount()
+	ipc_data_emitter.checkLimitEventCount()
 
 	return outputLostIpcEvents(eventType, lost, time.Now())
 }

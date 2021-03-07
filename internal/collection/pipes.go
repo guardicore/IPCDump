@@ -287,7 +287,7 @@ func InitPipeIpcCollection(bpfBuilder *bpf.BpfBuilder) error {
 	return nil
 }
 
-func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte) error {
+func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte, ipcDataEmitter *events.IpcDataEmitter) error {
 	pipeName := nullStr(event.PipeName[:])
 	if len(pipeName) == 0 {
 		pipeName = "<anonymous>"
@@ -304,7 +304,7 @@ func handlePipeIoEvent(event *pipeIoEvent, eventBytes []byte) error {
 		},
 		Bytes: eventBytes,
 	}
-	return events.EmitIpcEvent(e)
+	return ipcDataEmitter.EmitIpcEvent(e)
 }
 
 func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
@@ -342,7 +342,7 @@ func installPipeIpcHooks(bpfMod *bpf.BpfModule) error {
 	return nil
 }
 
-func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
+func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}, ipcDataEmitter *events.IpcDataEmitter) error {
 	perfChannel := make(chan []byte, 1024)
 	lostChannel := make(chan uint64, 32)
 	perfMap, err := bpfMod.InitPerfMap(perfChannel, "pipe_events", lostChannel)
@@ -366,12 +366,12 @@ func CollectPipeIpc(bpfMod *bpf.BpfModule, exit <-chan struct{}) error {
 				return fmt.Errorf("failed to parse pipe io event: %w", err)
 			}
 			eventBytes := perfData[len(eventMetadata):][:event.BytesLen]
-			if err := handlePipeIoEvent(&event, eventBytes); err != nil {
+			if err := handlePipeIoEvent(&event, eventBytes, ipcDataEmitter); err != nil {
 				return fmt.Errorf("failed to handle pipe io event: %w", err)
 			}
 
 		case lost := <-lostChannel:
-			events.EmitLostIpcEvents(events.IPC_EVENT_PIPE, lost)
+			ipcDataEmitter.EmitLostIpcEvents(events.IPC_EVENT_PIPE, lost)
 
 		case <-exit:
 			return nil
