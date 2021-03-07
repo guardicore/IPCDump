@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strconv"
@@ -26,6 +27,7 @@ const (
 type outputFunc func(IpcEvent) error
 type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 
+var outputFileWriter io.Writer = os.Stdout
 var CSVHeader string = "timestamp,type,src_pid,src_comm,dst_pid,dst_comm"
 var printCSVHeader = false
 var outputBytesLimit int = 0
@@ -76,7 +78,7 @@ func (w indentedWriter) Write(p []byte) (n int, err error) {
 }
 
 func emitOutput(output string, args ...interface{}) {
-	fmt.Printf(output+"\n", args...)
+	fmt.Fprintf(outputFileWriter, output+"\n", args...)
 }
 
 func getEventBytes(b []byte) string {
@@ -193,6 +195,10 @@ func outputLostIpcEventsCsv(t EmittedEventType, lost uint64, ts time.Time) error
 	}
 	emitOutput("%s,%s,-,-,-,-", formatTimestamp(ts), t)
 	return nil
+}
+
+func SetOutputFile(outputFile io.Writer) {
+	outputFileWriter = outputFile
 }
 
 func SetEmitOutputFormat(outputFmt EventOutputFormat) error {
