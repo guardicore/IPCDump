@@ -29,8 +29,6 @@ type outputLostFunc func(EmittedEventType, uint64, time.Time) error
 var CSVHeader string = "timestamp,type,src_pid,src_comm,dst_pid,dst_comm"
 var printCSVHeader = false
 var outputBytesLimit int = 0
-var limitEventCount bool = false
-var eventCountLimit uint = 0
 var EmitOutputFunc outputFunc = outputEmittedIpcEventText
 var EmitOutputLostFunc outputLostFunc = outputLostIpcEventsText
 
@@ -228,27 +226,12 @@ func SetEmitOutputBytesLimit(limit int) error {
 	return nil
 }
 
-func SetEmitEventCountLimit(limit uint) error {
-	if limit > 0 {
-		limitEventCount = true
-		eventCountLimit = limit
-	}
-	return nil
-}
-
 // no interspersed writing!
 var mu sync.Mutex
 
 func outputIpcEvent(event IpcEvent) error {
 	mu.Lock()
 	defer mu.Unlock()
-	if limitEventCount {
-		if eventCountLimit == 0 {
-			os.Exit(1)
-		}
-		eventCountLimit--
-
-	}
 	return EmitOutputFunc(event)
 }
 
