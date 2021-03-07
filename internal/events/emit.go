@@ -1,6 +1,7 @@
 package events
 
 import (
+	"os"
 	"time"
 )
 
@@ -192,15 +193,37 @@ func isPidCommAllowed(srcPid int64, dstPid int64, srcComm string, dstComm string
 }
 
 var skipLostEvents = false
+var limitEventCount bool = false
+var eventCountLimit uint = 0
+
+func SetEmitEventCountLimit(limit uint) {
+	if limit == 0 {
+		return
+	}
+	limitEventCount = true
+	eventCountLimit = limit
+}
 
 func SetSkipLostIpcEvents(skip bool) {
 	skipLostEvents = skip
 }
 
+func checkLimitEventCount() {
+	if !limitEventCount {
+		return
+	}
+
+	if eventCountLimit == 0 {
+		os.Exit(1)
+	}
+
+	eventCountLimit--
+}
 func EmitIpcEvent(event IpcEvent) error {
 	if !isPidCommAllowed(event.Src.Pid, event.Dst.Pid, event.Src.Comm, event.Dst.Comm) {
 		return nil
 	}
+	checkLimitEventCount()
 
 	// we *could* filter by type here, too, but it's better to handle that at the hook-placement
 	// level so that we don't get too lazy
@@ -212,5 +235,8 @@ func EmitLostIpcEvents(eventType EmittedEventType, lost uint64) error {
 	if skipLostEvents {
 		return nil
 	}
+
+	checkLimitEventCount()
+
 	return outputLostIpcEvents(eventType, lost, time.Now())
 }
