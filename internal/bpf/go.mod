@@ -1,4 +1,4 @@
-module github.com/guardicode/ipcdump/internal/bpf
+module github.com/guardicore/ipcdump/internal/bpf
 
 go 1.15
 

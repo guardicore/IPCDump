@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/guardicore/ipcdump/internal/events"
 )
 
 func NopEmit(events.IpcEvent) error {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guardicode/ipcdump/internal/bpf"
-	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/guardicore/ipcdump/internal/bpf"
+	"github.com/guardicore/ipcdump/internal/events"
 )
 
 // TODO: rewrite this with unix.Syscalls. working around net.Conn is a pain
