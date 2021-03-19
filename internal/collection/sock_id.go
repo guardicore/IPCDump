@@ -3,7 +3,7 @@ package collection
 import (
 	"fmt"
 
-	"github.com/guardicode/ipcdump/internal/bpf"
+	"github.com/guardicore/ipcdump/internal/bpf"
 )
 
 // Lots of hooks here, but they all do pretty much the same thing: any time someone creates a new

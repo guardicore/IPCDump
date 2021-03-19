@@ -1,4 +1,4 @@
-module github.com/guardicode/ipcdump/internal/collection
+module github.com/guardicore/ipcdump/internal/collection
 
 go 1.15
 

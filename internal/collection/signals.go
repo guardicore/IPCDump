@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"syscall"
 
-	"github.com/guardicode/ipcdump/internal/bpf"
-	"github.com/guardicode/ipcdump/internal/events"
+	"github.com/guardicore/ipcdump/internal/bpf"
+	"github.com/guardicore/ipcdump/internal/events"
 	"github.com/iovisor/gobpf/bcc"
 )
 
